@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import query, relationships
-from ..errors import ModeError, OutputError
+from ..errors import ModeError, OutputError, QueryError
 from ..evidence import EvidenceLedger
 from ..ingest.checksum import hash_file
 from ..ingest.conventions import MissingValueConvention
@@ -394,11 +394,7 @@ class DatasetService:
 
         available = [column["name"] for column in profile.get("columns", [])]
         selected = available if columns is None else list(columns)
-        unknown = [name for name in selected if name not in available]
-        if unknown:
-            raise KeyError(
-                f"unknown column(s) for '{path}': {unknown}; available columns: {available}"
-            )
+        _require_known_columns(path, available, selected)
 
         requested_limit = int(limit)
         if requested_limit < 1:
@@ -2106,7 +2102,9 @@ def _ordered_union(*groups: list[str]) -> list[str]:
 def _require_known_columns(path: str, available: list[str], selected: list[str]) -> None:
     unknown = [name for name in selected if name not in available]
     if unknown:
-        raise KeyError(f"unknown column(s) for '{path}': {unknown}; available columns: {available}")
+        raise QueryError(
+            f"unknown column(s) for '{path}': {unknown}; available columns: {available}"
+        )
 
 
 def _project_row(row: dict[str, Any], columns: list[str]) -> dict[str, Any]:
