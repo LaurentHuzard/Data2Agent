@@ -2342,9 +2342,7 @@ def _bounded_contributor_locators(locators: list[Any]) -> dict[str, Any]:
     }
 
 
-def _contributor_input(
-    table: str, context: dict[str, Any], locators: list[Any]
-) -> dict[str, Any]:
+def _contributor_input(table: str, context: dict[str, Any], locators: list[Any]) -> dict[str, Any]:
     """Contributor provenance for one aggregate input without rereading source bytes."""
 
     return {
