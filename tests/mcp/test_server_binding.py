@@ -116,6 +116,30 @@ async def test_calling_inspect_table_over_mcp_returns_the_profile(server):
 
 
 @pytest.mark.anyio
+async def test_tool_input_schemas_are_closed(server):
+    for tool in await server.list_tools():
+        assert tool.inputSchema.get("additionalProperties") is False
+
+
+@pytest.mark.anyio
+async def test_unknown_tool_argument_is_rejected_before_execution(server):
+    try:
+        from mcp.server.mcpserver.exceptions import ToolError
+    except ImportError:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+    with pytest.raises(ToolError, match=r"unknown argument.*filters.*allowed arguments"):
+        await server.call_tool(
+            "read_rows",
+            {
+                "path": "observations.csv",
+                "columns": ["latency_s"],
+                "filters": [{"column": "animal_id", "op": "eq", "value": "A002"}],
+            },
+        )
+
+
+@pytest.mark.anyio
 async def test_calling_read_rows_over_mcp_returns_observations(server):
     result = await server.call_tool(
         "read_rows",
