@@ -142,6 +142,22 @@ async def test_unknown_tool_argument_is_rejected_before_execution(server):
 
 
 @pytest.mark.anyio
+async def test_row_tool_descriptions_distinguish_slicing_from_filtering(server):
+    tools = {tool.name: tool for tool in await server.list_tools()}
+
+    read_description = tools["read_rows"].description or ""
+    filter_description = tools["filter_rows"].description or ""
+
+    assert "offset/limit only" in read_description
+    assert "does not apply predicates" in read_description
+    assert "use filter_rows instead" in read_description
+
+    assert "must satisfy one or more conditions" in filter_description
+    assert "applies the supplied predicates" in filter_description
+    assert "Unlike read_rows" in filter_description
+
+
+@pytest.mark.anyio
 async def test_calling_read_rows_over_mcp_returns_observations(server):
     result = await server.call_tool(
         "read_rows",
