@@ -416,16 +416,48 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
         """
         return service.get_fair_indicator(rule_id)
 
+    def list_fair_principles() -> dict[str, Any]:
+        """List all 15 GO FAIR Foundation interpretation items and local rule links."""
+        return service.list_fair_principles()
+
+    def get_fair_principle(principle_id: str) -> dict[str, Any]:
+        """Get one FAIR item's question, required evidence, source, and next action."""
+        return service.get_fair_principle(principle_id)
+
+    def assess_fair_principles(
+        principle_id: str | None = None,
+        live: bool = False,
+        publication_url: str | None = None,
+        unpublished: bool = False,
+    ) -> dict[str, Any]:
+        """Assess Foundation items and recommend actions for unverified evidence.
+
+        Set live=true with a public publication_url to probe its HTTP route.
+        The public DOI resolver exchange is recorded as a scoped observation;
+        it cannot establish dataset identity or a full principle pass.
+        """
+        return service.assess_fair_principles(
+            principle_id, live=live, publication_url=publication_url, unpublished=unpublished
+        )
+
+    def get_fair_recommendations(
+        rule_id: str | None = None, unpublished: bool = False
+    ) -> dict[str, Any]:
+        """Get local finding repairs plus evidence gaps for all 15 FAIR items."""
+        return service.get_fair_recommendations(rule_id, unpublished=unpublished)
+
     def run_fair_check(
         rule_id: str | None = None,
         host: str | None = None,
         model: str | None = None,
         orchestrator: str | None = None,
     ) -> dict[str, Any]:
-        """Run the deterministic FAIR checks, returning an evidence-bound assessment.
+        """Run narrow local FAIR checks, returning an evidence-bound assessment.
 
         Verdicts come from code, not from a model. Results marked 'unknown' are
         preserved as unknown and must not be resolved by reasoning over them.
+        A pass is not a full Foundation-principle pass; use
+        assess_fair_principles for the 15 interpretation-level items.
         """
         return service.run_fair_check(rule_id, host=host, model=model, orchestrator=orchestrator)
 
@@ -458,6 +490,10 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
         "get_provenance": get_provenance,
         "list_fair_rules": list_fair_rules,
         "get_fair_indicator": get_fair_indicator,
+        "list_fair_principles": list_fair_principles,
+        "get_fair_principle": get_fair_principle,
+        "assess_fair_principles": assess_fair_principles,
+        "get_fair_recommendations": get_fair_recommendations,
         "run_fair_check": run_fair_check,
         "validate_identifier": validate_identifier,
     }

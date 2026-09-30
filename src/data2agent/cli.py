@@ -3,6 +3,7 @@
 data2agent ingest  <dataset> -o <output>   deterministic scan -> manifest/evidence
                    [--layout layouts.json]  declared table headers (D2A-97)
 data2agent verify  <output>                re-checksum the source against the manifest
+data2agent recommend <output>              generate evidence-linked FAIR actions
 data2agent serve   <output> --mode <mode>  run the Data2MCP server over stdio
 data2agent relationships <output>          resolve cross-table relationships
     [--declarations rel.json] [--crosswalk [NAME=]ids.csv ...]
@@ -25,6 +26,7 @@ from .ingest.layout import load_declarations
 from .ingest.pipeline import write_json
 from .mcp.modes import DEFAULT_MODE, MODES
 from .mcp.service import DatasetService
+from .profiles.fair.remediation import write_recommendations
 from .relationships import RELATIONSHIPS_FILENAME, load_crosswalk_file
 from .report import write_mcp_config, write_report
 
@@ -110,6 +112,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--source", type=Path, default=None, help="override the recorded source"
     )
     assess_parser.set_defaults(handler=_cmd_assess)
+
+    recommend_parser = subparsers.add_parser(
+        "recommend", help="generate evidence-linked FAIR remediation guidance"
+    )
+    recommend_parser.add_argument("output", type=Path, help="an ingest output directory")
+    recommend_parser.set_defaults(handler=_cmd_recommend)
 
     serve_parser = subparsers.add_parser("serve", help="run the Data2MCP server")
     serve_parser.add_argument("output", type=Path, help="an ingest output directory")
@@ -217,6 +225,7 @@ def _cmd_assess(args: argparse.Namespace) -> int:
     assessment = service.run_fair_check(args.rule, orchestrator="deterministic")
     destination = Path(args.output) / "assessment.json"
     write_json(destination, assessment)
+    recommendations_json, recommendations_md = write_recommendations(Path(args.output), assessment)
 
     summary = assessment["summary"]
     print(f"dataset_id : {assessment['dataset_id']}")
@@ -225,12 +234,28 @@ def _cmd_assess(args: argparse.Namespace) -> int:
         "results    : " + ", ".join(f"{count} {name}" for name, count in summary.items() if count)
     )
     print(f"written    : {destination}")
+    print(f"recommend. : {recommendations_json}")
+    print(f"action plan: {recommendations_md}")
     print()
     for result in assessment["results"]:
         print(f"  {result['rule_id']:<32} {result['result']}")
         if result.get("rationale"):
             print(f"  {'':<32} {' '.join(result['rationale'].split())}")
     # A failed indicator is a finding about the dataset, not a tool error.
+    return 0
+
+
+def _cmd_recommend(args: argparse.Namespace) -> int:
+    assessment_path = Path(args.output) / "assessment.json"
+    if not assessment_path.is_file():
+        raise FileNotFoundError(
+            f"{assessment_path} is missing; run 'data2agent assess {args.output}' first"
+        )
+    assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+    json_path, markdown_path = write_recommendations(Path(args.output), assessment)
+    print(f"recommendations : {json_path}")
+    print(f"action plan     : {markdown_path}")
+    print("source dataset  : unchanged; recommendations require curator review")
     return 0
 
 

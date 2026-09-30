@@ -107,6 +107,7 @@ class RuleResult:
     evidence: list[Any]
     rationale: str = ""
     inferred: bool = False
+    observations: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -118,6 +119,8 @@ class RuleResult:
         }
         if self.rationale:
             payload["rationale"] = self.rationale
+        if self.observations:
+            payload["observations"] = self.observations
         return payload
 
 

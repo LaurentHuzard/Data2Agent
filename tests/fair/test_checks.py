@@ -38,6 +38,56 @@ def test_the_example_dataset_assesses_as_expected(service):
     # Two genuine defects in the example, both deliberate.
     assert results["I2-VOCABULARY-REFERENCED"]["result"] == "fail"
     assert results["R1.3-MISSING-VALUES-DECLARED"]["result"] == "fail"
+    assert results["F1-PID-METADATA"]["observations"]["identifiers"]
+
+
+def test_empty_declarations_do_not_pass_local_checks(tmp_path: Path):
+    source = tmp_path / "dataset"
+    source.mkdir()
+    (source / "data.csv").write_text("id,value\n1,2\n", encoding="utf-8")
+    (source / "datapackage.json").write_text(
+        json.dumps({"license": None, "creator": "", "@context": {}, "description": "data.csv"}),
+        encoding="utf-8",
+    )
+    ingested = ingest(source, tmp_path / "out")
+    service = DatasetService(ingested.output_dir, mode="fair-deterministic")
+    results = _by_rule(service.run_fair_check())
+    for rule_id in (
+        "R1.1-LICENCE-DECLARED",
+        "R1.2-PROVENANCE-DECLARED",
+        "I2-VOCABULARY-REFERENCED",
+    ):
+        assert results[rule_id]["result"] == "fail", rule_id
+    assert service.assess_fair_principles("R1.1")["results"][0]["result"] == "unknown"
+
+
+def test_citation_and_placeholder_fields_do_not_pass_as_fair_evidence(tmp_path: Path):
+    source = tmp_path / "dataset"
+    source.mkdir()
+    (source / "data.csv").write_text("id,value\n1,2\n", encoding="utf-8")
+    (source / "datapackage.json").write_text(
+        json.dumps(
+            {
+                "citation": "https://doi.org/10.1234/unrelated-paper",
+                "organization": "https://ror.org/03yrm5c26",
+                "license": "TBD later",
+                "creator": "none yet",
+                "description": "A note mentions schema.org but defines no vocabulary terms.",
+                "resources": [{"path": "data.csv"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ingested = ingest(source, tmp_path / "out")
+    service = DatasetService(ingested.output_dir, mode="fair-deterministic")
+    results = _by_rule(service.run_fair_check())
+    for rule_id in (
+        "F1-PID-METADATA",
+        "I2-VOCABULARY-REFERENCED",
+        "R1.1-LICENCE-DECLARED",
+        "R1.2-PROVENANCE-DECLARED",
+    ):
+        assert results[rule_id]["result"] == "fail", rule_id
 
 
 def test_unimplemented_rules_stay_unknown_rather_than_disappearing(service):

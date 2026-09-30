@@ -86,6 +86,88 @@ async def test_calling_run_fair_check_over_mcp_returns_an_assessment(ingested):
 
 
 @pytest.mark.anyio
+async def test_foundation_items_are_individually_addressable_over_mcp(ingested):
+    server = build_server(DatasetService(ingested.output_dir, mode="fair-deterministic"))
+    names = await _tool_names(server)
+    assert {
+        "list_fair_principles",
+        "get_fair_principle",
+        "assess_fair_principles",
+        "get_fair_recommendations",
+    } <= names
+    listing = json.loads(_text_of(await server.call_tool("list_fair_principles", {})))
+    assert len(listing["principles"]) == 15
+    detail = json.loads(
+        _text_of(await server.call_tool("get_fair_principle", {"principle_id": "A1.2"}))
+    )
+    assert detail["id"] == "A1.2" and detail["required_evidence"]
+    assessment = json.loads(
+        _text_of(await server.call_tool("assess_fair_principles", {"principle_id": "F4"}))
+    )
+    assert assessment["summary"] == {"total": 1, "pass": 0, "unknown": 1}
+    assert assessment["results"][0]["principle"] == "F4"
+    assert assessment["results"][0]["recommendations"]
+    recommendations = json.loads(
+        _text_of(await server.call_tool("get_fair_recommendations", {}))
+    )
+    assert recommendations["recommendations"]
+    assert all(item["findings"] for item in recommendations["recommendations"])
+    assert len(recommendations["principle_recommendations"]) == 15
+    a2 = next(
+        item for item in recommendations["principle_recommendations"]
+        if item["principle"] == "A2"
+    )
+    assert a2["result"] == "unknown"
+    assert len(a2["unverified_requirements"]) == 3
+    assert all(need["action"] for need in a2["unverified_requirements"])
+    assert assessment["results"][0]["evidence_plan"][1]["action"].startswith("Query")
+
+
+@pytest.mark.anyio
+async def test_opt_in_publication_probe_is_available_over_mcp(ingested, monkeypatch):
+    url = "https://doi.org/10.5281/zenodo.0000000"
+    monkeypatch.setattr(
+        "data2agent.profiles.fair.live.probe_public_url",
+        lambda value, **kwargs: {
+            "method": "bounded-public-http-get",
+            "source": value,
+            "observed_at": "2026-09-30T12:00:00Z",
+            "result": "reached",
+            "final_url": "https://repository.example/record",
+            "status_code": 200,
+            "identifier_seen_in_sample": True,
+            "chain": [],
+        },
+    )
+    server = build_server(DatasetService(ingested.output_dir, mode="fair-deterministic"))
+    result = await server.call_tool(
+        "assess_fair_principles",
+        {"principle_id": "A1.1", "live": True, "publication_url": url},
+    )
+    assessment = json.loads(_text_of(result))
+    assert assessment["publication_binding"] is True
+    assert assessment["results"][0]["result"] == "unknown"
+    assert assessment["results"][0]["evidence_plan"][0]["status"] == "observed_partial"
+
+
+@pytest.mark.anyio
+async def test_unpublished_guidance_is_available_over_mcp(ingested):
+    server = build_server(DatasetService(ingested.output_dir, mode="fair-deterministic"))
+    result = await server.call_tool(
+        "get_fair_recommendations", {"unpublished": True}
+    )
+    guidance = json.loads(_text_of(result))
+    f4 = next(
+        item for item in guidance["principle_recommendations"]
+        if item["principle"] == "F4"
+    )
+    assert any(
+        need["status"] == "pending_publication"
+        for need in f4["unverified_requirements"]
+    )
+
+
+@pytest.mark.anyio
 async def test_calling_get_provenance_over_mcp_returns_the_timestamps(server):
     result = await server.call_tool("get_provenance", {})
     payload = json.loads(_text_of(result))

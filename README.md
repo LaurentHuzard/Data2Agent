@@ -42,6 +42,7 @@ data2agent ingest examples/preclinical-minimal -o ./preclinical-agent
 
 # 2. Assess it against the FAIR profile — verdicts from code, not from a model
 data2agent assess ./preclinical-agent
+# The assessment also writes a prioritized action plan with evidence and examples.
 
 # 3. Connect the server (the exact command for your host is in mcp/USAGE.md)
 claude mcp add data2agent -- python -m data2agent.cli serve ./preclinical-agent
@@ -58,9 +59,15 @@ Output:
 ├── provenance.json   what this run was     (time, duration, tool version)
 ├── evidence.json     claim → evidence → file → checksum
 ├── assessment.json   FAIR results, each citing the evidence behind it
+├── recommendations.json  prioritized, evidence-linked remediation actions
 ├── mcp/              server definition + USAGE.md for any MCP host
-└── report/           evidence-backed Markdown; every fact carries a claim id
+└── report/           evidence-backed report + FAIR remediation plan
 ```
+
+FAIR recommendations are advisory. They name the actions and checks that can
+improve the next assessment, link back to the rule findings, and call out
+decisions that need the data owner. They never edit the source. See
+[`docs/fair-remediation-contract.md`](docs/fair-remediation-contract.md).
 
 The example dataset assesses as 8 pass, 2 fail, 2 unknown. Both failures are
 real and deliberate; both unknowns are questions a local snapshot cannot settle.
@@ -222,7 +229,11 @@ In the `fair-*` modes only:
 | --- | --- |
 | `list_fair_rules()` | the canonical rule registry |
 | `get_fair_indicator(rule_id)` | one rule in full, exactly as authored |
+| `list_fair_principles()` | all 15 GO FAIR Foundation interpretation items |
+| `get_fair_principle(principle_id)` | one item's required evidence and next action |
 | `run_fair_check(rule_id?)` | a deterministic, evidence-bound assessment |
+| `assess_fair_principles(principle_id?, live?, publication_url?, unpublished?)` | Foundation evidence and actions; `unpublished=true` marks release-dependent checks as pending |
+| `get_fair_recommendations(rule_id?, unpublished?)` | prioritized local repairs and requirement actions for all 15 items |
 | `validate_identifier(value)` | syntax against the scheme; no network call |
 
 Resources: `dataset://manifest`, `dataset://metadata`, `dataset://provenance`,

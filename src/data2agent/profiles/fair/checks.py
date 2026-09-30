@@ -27,9 +27,9 @@ from ..model import (
     Rule,
 )
 
-# Identifier schemes that can identify a *dataset*. ORCID identifies a person
-# and a bare URI is not persistent, so neither satisfies F1 on its own.
-_PERSISTENT_SCHEMES = {"doi", "ror"}
+# Identifier schemes that can identify a *dataset*. ORCID and ROR identify
+# people and organizations; a bare URI is not necessarily persistent.
+_PERSISTENT_SCHEMES = {"doi"}
 _PERSISTENT_URI_MARKERS = (
     "doi.org/",
     "hdl.handle.net/",
@@ -85,6 +85,7 @@ _CLOSED_FORMATS = frozenset({"matlab", "xlsx", "xls", "xlsb"})
 
 # Namespaces whose appearance in metadata evidences a controlled vocabulary.
 _VOCABULARY_MARKERS = (
+    "w3id.org/",
     "schema.org",
     "purl.obolibrary.org",
     "purl.org/dc/",
@@ -95,10 +96,9 @@ _VOCABULARY_MARKERS = (
     "edamontology.org",
     "obofoundry.org",
     "vocab.nerc.ac.uk",
-    "@context",
 )
 
-_LICENCE_KEYS = ("license", "licence", "rights", "licenseurl", "dct:license", "spdx")
+_LICENCE_KEYS = ("license", "licenses", "licence", "licences", "rights", "licenseurl", "spdx")
 _PROVENANCE_KEYS = (
     "author",
     "authors",
@@ -111,7 +111,6 @@ _PROVENANCE_KEYS = (
     "wasderivedfrom",
     "provenance",
     "source",
-    "citation",
 )
 
 # Filename conventions that are community metadata standards. A README is
@@ -122,6 +121,12 @@ _COMMUNITY_STANDARDS = {"ro-crate", "frictionless", "bids", "isa-tab", "codemeta
 def identifier_presence(rule: Rule, context: ProfileContext) -> CheckOutcome:
     metadata_paths = context.metadata_paths
     if not metadata_paths:
+        if context.metadata_candidates:
+            return CheckOutcome(
+                result=UNKNOWN,
+                rationale="no metadata was recognized, but candidate files could not be examined",
+                evidence=_candidate_evidence(context.metadata_candidates),
+            )
         return CheckOutcome(
             result=FAIL,
             rationale=(
@@ -130,34 +135,54 @@ def identifier_presence(rule: Rule, context: ProfileContext) -> CheckOutcome:
             evidence=[_inline("metadata.file-convention", [], "no recognised metadata files")],
         )
 
+    declarations = _dataset_identifier_declarations(context)
     hits = [
         hit
         for hit in context.identifiers
-        if hit["source"] in metadata_paths and _is_persistent(hit)
+        if _is_persistent(hit)
+        and any(
+            hit["source"] == declaration["path"]
+            and hit["value"].lower() in declaration["value"].lower()
+            for declaration in declarations
+        )
     ]
     if hits:
         return CheckOutcome(
             result=PASS,
             rationale=(
-                f"{len(hits)} persistent-identifier-shaped value(s) found in dataset metadata; "
+                f"{len(hits)} persistent-identifier-shaped value(s) found in explicit dataset "
+                "identifier fields; "
                 f"whether they resolve is F1-PID-RESOLVABLE and was not checked"
             ),
-            evidence=_identifier_evidence(context, hits),
+            evidence=_identifier_evidence(context, hits)
+            + [_inline("identifier.dataset-field", declarations, "explicit identifier fields")],
             observations={"identifiers": [hit["value"] for hit in hits]},
+        )
+
+    if _unresolved_metadata(context):
+        return CheckOutcome(
+            result=UNKNOWN,
+            rationale=(
+                "no dataset identifier was found in readable metadata, but "
+                f"{_unread_detail(context)}"
+            ),
+            evidence=_unread_evidence(context)
+            + [_inline("identifier.dataset-field", declarations, "readable declarations")],
         )
 
     other = [hit["value"] for hit in context.identifiers if hit["source"] in metadata_paths]
     return CheckOutcome(
         result=FAIL,
         rationale=(
-            "no DOI-, handle-, ARK- or ROR-shaped identifier appears in any recognised "
-            "metadata file" + (f"; the identifiers that do appear are {other}" if other else "")
+            "no DOI-, handle-, ARK- or other persistent-identifier-shaped value appears "
+            "in an explicit dataset identifier field of recognized metadata"
+            + (f"; other identifiers found in metadata are {other}" if other else "")
         ),
         evidence=[
             _inline(
-                "identifier.detected",
-                other,
-                f"scanned {len(metadata_paths)} metadata file(s) for persistent identifiers",
+                "identifier.dataset-field",
+                declarations,
+                f"checked {len(metadata_paths)} metadata file(s) for explicit identifiers",
             )
         ],
     )
@@ -402,12 +427,7 @@ def vocabulary_reference(rule: Rule, context: ProfileContext) -> CheckOutcome:
             observations={"unread": [item["path"] for item in unread]},
         )
 
-    found: dict[str, list[str]] = {}
-    for path, text in texts.items():
-        lowered = text.lower()
-        markers = [marker for marker in _VOCABULARY_MARKERS if marker in lowered]
-        if markers:
-            found[path] = markers
+    found = _vocabulary_declarations(texts)
 
     if found:
         return CheckOutcome(
@@ -446,11 +466,16 @@ def license_declared(rule: Rule, context: ProfileContext) -> CheckOutcome:
     licence_files = [
         item["path"] for item in context.metadata_files if item["convention"] == "license"
     ]
-    if licence_files:
+    readable_licences = [
+        path for path in licence_files if _meaningful(context.metadata_text().get(path))
+    ]
+    if readable_licences:
         return CheckOutcome(
             result=PASS,
             rationale="",
-            evidence=[_inline("metadata.file-convention", licence_files, "dedicated licence file")],
+            evidence=[
+                _inline("metadata.file-convention", readable_licences, "nonempty licence file")
+            ],
         )
 
     declarations = _find_keys(context, _LICENCE_KEYS)
@@ -809,6 +834,103 @@ def _unread_evidence(context: ProfileContext) -> list[Any]:
     return evidence or [_inline("metadata.file-convention", [], "no recognised metadata files")]
 
 
+def _dataset_identifier_declarations(context: ProfileContext) -> list[dict[str, str]]:
+    """Find identifiers explicitly assigned to this dataset, not citations.
+
+    Restrict JSON to a root dataset field or a JSON-LD Dataset node. Scanning
+    arbitrary nested keys would treat identifiers of papers and contributors as
+    identifiers of the described dataset.
+    """
+    declarations: list[dict[str, str]] = []
+    keys = {"datasetdoi", "datasetidentifier", "doi", "identifier", "@id", "id"}
+    for path, text in context.metadata_text().items():
+        try:
+            document = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            document = None
+        nodes: list[dict[str, Any]] = []
+        if isinstance(document, dict):
+            nodes.append(document)
+            graph = document.get("@graph")
+            if isinstance(graph, list):
+                nodes.extend(
+                    node
+                    for node in graph
+                    if isinstance(node, dict) and "dataset" in str(node.get("@type", "")).lower()
+                )
+        for node in nodes:
+            for key, value in node.items():
+                normalized = key.lower().replace("_", "").replace("-", "")
+                if normalized not in keys:
+                    continue
+                values = value if isinstance(value, list) else [value]
+                for item in values:
+                    if isinstance(item, dict):
+                        item = item.get("value") or item.get("@id")
+                    if isinstance(item, str) and item.strip():
+                        declarations.append({"path": path, "field": key, "value": item.strip()})
+        if document is None:
+            for match in re.finditer(
+                r"^[ \t]*dataset[ \t]*(?:doi|identifier|id)[ \t]*:[ \t]*([^\r\n]+)$",
+                text,
+                re.IGNORECASE | re.MULTILINE,
+            ):
+                declarations.append(
+                    {"path": path, "field": "dataset identifier", "value": match.group(1).strip()}
+                )
+    return declarations
+
+
+def _vocabulary_declarations(texts: dict[str, str]) -> dict[str, list[str]]:
+    """Find namespace URIs in explicit vocabulary declarations, not citations."""
+    found: dict[str, list[str]] = {}
+    for path, text in texts.items():
+        try:
+            document = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            document = None
+        candidates: list[str] = []
+        if isinstance(document, dict):
+            for key, value in _walk_key_values(document):
+                normalized = key.lower().replace("_", "").replace("-", "")
+                if normalized == "@context" or normalized in {
+                    "vocabulary",
+                    "vocabularies",
+                    "ontology",
+                    "ontologies",
+                    "termuri",
+                }:
+                    candidates.extend(_string_values(value))
+        elif document is None:
+            for match in re.finditer(
+                r"^[ \t]*(?:vocabulary|ontology)[ \t]*:[ \t]*([^\r\n]+)$",
+                text,
+                re.IGNORECASE | re.MULTILINE,
+            ):
+                candidates.append(match.group(1))
+        markers = sorted(
+            {
+                marker
+                for value in candidates
+                for marker in _VOCABULARY_MARKERS
+                if marker in value.lower()
+            }
+        )
+        if markers:
+            found[path] = markers
+    return found
+
+
+def _string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [item for child in value.values() for item in _string_values(child)]
+    if isinstance(value, list):
+        return [item for child in value for item in _string_values(child)]
+    return []
+
+
 def _is_persistent(hit: dict[str, Any]) -> bool:
     if hit["scheme"] in _PERSISTENT_SCHEMES:
         return True
@@ -828,7 +950,7 @@ def _identifier_evidence(context: ProfileContext, hits: list[dict[str, Any]]) ->
 
 
 def _find_keys(context: ProfileContext, keys: tuple[str, ...]) -> dict[str, list[str]]:
-    """Find which of ``keys`` appear as keys in structured metadata documents.
+    """Find which of ``keys`` have meaningful values in metadata documents.
 
     Keys are matched case-insensitively and ignoring any namespace prefix, so
     ``dct:license`` and ``License`` both count. Prose metadata is searched only
@@ -844,30 +966,58 @@ def _find_keys(context: ProfileContext, keys: tuple[str, ...]) -> dict[str, list
             document = None
 
         if document is not None:
-            for key in _walk_keys(document):
+            for key, value in _walk_key_values(document):
                 bare = key.split(":")[-1].lower().replace("_", "").replace(" ", "")
-                if bare in keys:
+                if bare in keys and _meaningful(value):
                     matched.add(key)
         else:
             for key in keys:
-                if re.search(
-                    rf"^\s*[\"']?{re.escape(key)}[\"']?\s*:", text, re.IGNORECASE | re.MULTILINE
-                ):
+                match = re.search(
+                    rf"^[ \t]*[\"']?{re.escape(key)}[\"']?[ \t]*:[ \t]*([^\r\n]*)$",
+                    text,
+                    re.IGNORECASE | re.MULTILINE,
+                )
+                if match and _meaningful(match.group(1)):
                     matched.add(key)
         if matched:
             found[path] = sorted(matched)
     return found
 
 
-def _walk_keys(node: Any) -> list[str]:
+def _walk_key_values(node: Any) -> list[tuple[str, Any]]:
     if isinstance(node, dict):
-        keys = list(node.keys())
+        pairs = list(node.items())
         for value in node.values():
-            keys.extend(_walk_keys(value))
-        return keys
+            pairs.extend(_walk_key_values(value))
+        return pairs
     if isinstance(node, list):
-        keys: list[str] = []
+        pairs: list[tuple[str, Any]] = []
         for item in node:
-            keys.extend(_walk_keys(item))
-        return keys
+            pairs.extend(_walk_key_values(item))
+        return pairs
     return []
+
+
+def _meaningful(value: Any) -> bool:
+    """Reject empty declarations and obvious placeholders as evidence of content."""
+    if isinstance(value, str):
+        normalized = value.strip().strip("\"'").lower()
+        if normalized in {
+            "",
+            "null",
+            "none",
+            "unknown",
+            "tbd",
+            "todo",
+            "n/a",
+        }:
+            return False
+        return not any(
+            normalized.startswith(prefix)
+            for prefix in ("tbd ", "todo ", "none yet", "unknown ", "not provided", "pending ")
+        )
+    if isinstance(value, dict):
+        return any(_meaningful(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_meaningful(item) for item in value)
+    return value is not None and value is not False
