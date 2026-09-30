@@ -9,9 +9,11 @@ allowed to accumulate below the MCP boundary.
 
 from __future__ import annotations
 
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from ..errors import QueryError
 from .modes import DEFAULT_MODE
 from .service import DatasetService
 
@@ -40,6 +42,31 @@ def _server_class() -> Any:
         return FastMCP
     except ImportError as error:  # pragma: no cover - depends on optional extra
         raise ImportError(_MCP_IMPORT_HINT) from error
+
+
+def _tool_error_class() -> Any:
+    """Return ToolError across the MCP SDK 1.x/2.x package rename."""
+    try:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        return ToolError
+    except ImportError:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        return ToolError
+
+
+def _expose_query_errors(function: Any) -> Any:
+    """Expose anticipated query rejections without leaking unexpected crashes."""
+
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return function(*args, **kwargs)
+        except QueryError as error:
+            raise _tool_error_class()(str(error)) from None
+
+    return wrapped
 
 
 def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
@@ -465,7 +492,7 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
         implementation = implementations.get(tool_name)
         if implementation is None:  # pragma: no cover - guarded by modes.resolve_mode
             raise KeyError(f"mode '{service.mode.name}' requests unimplemented tool '{tool_name}'")
-        server.tool(name=tool_name)(implementation)
+        server.tool(name=tool_name)(_expose_query_errors(implementation))
 
     return server
 
