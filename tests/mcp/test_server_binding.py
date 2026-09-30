@@ -194,6 +194,7 @@ async def test_query_validation_error_is_readable_over_mcp(server):
     assert "session" in text
     assert "available columns" in text
 
+
 @pytest.mark.anyio
 async def test_calling_aggregate_over_mcp_returns_group_statistics(server):
     result = await server.call_tool(
