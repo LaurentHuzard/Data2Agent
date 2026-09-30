@@ -91,7 +91,13 @@ def _server_class() -> Any:
                 _tool_input_schema(tool)["additionalProperties"] = False
             return tools
 
-        async def call_tool(self, name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        async def call_tool(
+            self,
+            name: str,
+            arguments: dict[str, Any],
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
             if isinstance(arguments, dict):
                 tools = {tool.name: tool for tool in await self.list_tools()}
                 tool = tools.get(name)
