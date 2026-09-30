@@ -12,15 +12,21 @@ from data2agent.mcp import DatasetService
 
 
 @pytest.mark.parametrize("changed_file", ["dataset_description.json", "animals.csv"])
-@pytest.mark.parametrize("assessment", ["run_fair_check", "assess_fair_principles"])
+@pytest.mark.parametrize(
+    "assessment", ["run_fair_check", "assess_fair_principles", "plan_fair_publication"]
+)
 def test_fair_assessment_rejects_changed_source_file(
     dataset_copy: Path, tmp_path: Path, changed_file: str, assessment: str
 ) -> None:
     ingested = ingest(dataset_copy, tmp_path / "out")
     service = DatasetService(ingested.output_dir, mode="fair-deterministic")
 
-    # Both assessment paths work for the intact snapshot.
-    assert getattr(service, assessment)()["results"]
+    # Every advice path works for the intact snapshot.
+    initial = getattr(service, assessment)()
+    if assessment == "plan_fair_publication":
+        assert initial["recommended_path"]
+    else:
+        assert initial["results"]
 
     source_file = dataset_copy / changed_file
     source_file.write_bytes(source_file.read_bytes() + b"\nchanged after ingest\n")

@@ -46,3 +46,23 @@ curation agent. Later iterations can add a review UI, before/after comparison,
 broader repository checks, and approved metadata patch generation. A patch must remain
 separate from the source and must be re-ingested before any improvement is
 reported as achieved.
+
+## Publication decision guidance
+
+`plan_fair_publication` is an MCP decision guide for Zenodo. It compares local
+preparation, a sandbox test with synthetic data, an unpublished draft, and
+published records with public, restricted, or embargoed files. It uses current
+F2, R1.1 and R1.2 findings as narrow readiness signals, then asks whether the
+owner approved depositing the exact files, reviewed public metadata and file
+contents, and approved public file access. Missing or negative deposit approval
+keeps real files local. Answering those questions never authorizes the tool to
+upload or publish; the tool performs no external write.
+
+Zenodo [drafts](https://help.zenodo.org/docs/deposit/create-new-upload/) are
+unpublished, whereas a [published record](https://help.zenodo.org/docs/deposit/about-records/)
+has public metadata even if files are restricted. The
+[sandbox](https://developers.zenodo.org/) is for disposable testing. Submitting
+a draft for [community review](https://help.zenodo.org/docs/share/submit-for-review/)
+can publish it automatically on curator acceptance, so the guide surfaces that
+consequence when community submission is planned. The output follows
+[`fair-publication-advice.schema.json`](../schemas/fair-publication-advice.schema.json).

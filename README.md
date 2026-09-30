@@ -234,6 +234,7 @@ In the `fair-*` modes only:
 | `run_fair_check(rule_id?)` | a deterministic, evidence-bound assessment |
 | `assess_fair_principles(principle_id?, live?, publication_url?, unpublished?)` | Foundation evidence and actions; `unpublished=true` marks release-dependent checks as pending |
 | `get_fair_recommendations(rule_id?, unpublished?)` | prioritized local repairs and requirement actions for all 15 items |
+| `plan_fair_publication(...)` | Zenodo draft, sandbox, restricted, public, or embargo guidance tied to current findings and owner answers |
 | `validate_identifier(value)` | syntax against the scheme; no network call |
 
 Resources: `dataset://manifest`, `dataset://metadata`, `dataset://provenance`,

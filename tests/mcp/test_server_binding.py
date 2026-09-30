@@ -94,6 +94,7 @@ async def test_foundation_items_are_individually_addressable_over_mcp(ingested):
         "get_fair_principle",
         "assess_fair_principles",
         "get_fair_recommendations",
+        "plan_fair_publication",
     } <= names
     listing = json.loads(_text_of(await server.call_tool("list_fair_principles", {})))
     assert len(listing["principles"]) == 15
@@ -165,6 +166,17 @@ async def test_unpublished_guidance_is_available_over_mcp(ingested):
         need["status"] == "pending_publication"
         for need in f4["unverified_requirements"]
     )
+
+
+@pytest.mark.anyio
+async def test_publication_advice_is_available_over_mcp(ingested):
+    server = build_server(DatasetService(ingested.output_dir, mode="fair-deterministic"))
+    result = await server.call_tool(
+        "plan_fair_publication", {"purpose": "test", "test_with_real_data": False}
+    )
+    advice = json.loads(_text_of(result))
+    assert advice["recommended_path"] == "sandbox_test"
+    assert advice["external_action_taken"] is False
 
 
 @pytest.mark.anyio

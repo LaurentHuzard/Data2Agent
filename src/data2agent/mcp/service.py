@@ -1607,6 +1607,36 @@ class DatasetService:
         catalog["summary"]["principle_count"] = len(principle_results)
         return catalog
 
+    def plan_fair_publication(
+        self,
+        purpose: str = "explore",
+        owner_approval: bool | None = None,
+        metadata_public_approved: bool | None = None,
+        files_reviewed: bool | None = None,
+        files_public_approved: bool | None = None,
+        test_with_real_data: bool = False,
+        community_submission: bool = False,
+        embargo_until: str | None = None,
+    ) -> dict[str, Any]:
+        """Guide a Zenodo publication decision using current FAIR findings.
+
+        This is advice only. It never uploads files, creates a draft, reserves a
+        DOI, or treats caller answers as independently verified authorization.
+        """
+        from ..profiles.fair.publication import advise_publication
+
+        return advise_publication(
+            self.run_fair_check(),
+            purpose=purpose,
+            owner_approval=owner_approval,
+            metadata_public_approved=metadata_public_approved,
+            files_reviewed=files_reviewed,
+            files_public_approved=files_public_approved,
+            test_with_real_data=test_with_real_data,
+            community_submission=community_submission,
+            embargo_until=embargo_until,
+        )
+
     def run_fair_check(
         self,
         rule_id: str | None = None,

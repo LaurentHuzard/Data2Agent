@@ -446,6 +446,33 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
         """Get local finding repairs plus evidence gaps for all 15 FAIR items."""
         return service.get_fair_recommendations(rule_id, unpublished=unpublished)
 
+    def plan_fair_publication(
+        purpose: str = "explore",
+        owner_approval: bool | None = None,
+        metadata_public_approved: bool | None = None,
+        files_reviewed: bool | None = None,
+        files_public_approved: bool | None = None,
+        test_with_real_data: bool = False,
+        community_submission: bool = False,
+        embargo_until: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare Zenodo draft, sandbox, restricted, public, and embargo paths.
+
+        Answers express user decisions; the tool checks current local FAIR
+        findings and asks for missing owner decisions. It never contacts Zenodo
+        or publishes the dataset. Use purpose=explore, test, or release.
+        """
+        return service.plan_fair_publication(
+            purpose=purpose,
+            owner_approval=owner_approval,
+            metadata_public_approved=metadata_public_approved,
+            files_reviewed=files_reviewed,
+            files_public_approved=files_public_approved,
+            test_with_real_data=test_with_real_data,
+            community_submission=community_submission,
+            embargo_until=embargo_until,
+        )
+
     def run_fair_check(
         rule_id: str | None = None,
         host: str | None = None,
@@ -494,6 +521,7 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
         "get_fair_principle": get_fair_principle,
         "assess_fair_principles": assess_fair_principles,
         "get_fair_recommendations": get_fair_recommendations,
+        "plan_fair_publication": plan_fair_publication,
         "run_fair_check": run_fair_check,
         "validate_identifier": validate_identifier,
     }

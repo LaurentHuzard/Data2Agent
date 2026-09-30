@@ -199,6 +199,7 @@ get_fair_principle(item_id)     one item's evidence needs and guidance
 run_fair_check(rule_id?)        run one rule, or the whole profile
 assess_fair_principles(item_id?, live?, publication_url?, unpublished?) Foundation evidence + actions
 get_fair_recommendations(rule_id?, unpublished?) prioritized local and principle actions
+plan_fair_publication(...)       Zenodo decision guide; asks for owner decisions
 validate_identifier(value)      syntax check against the scheme; no network call
 validate_metadata_schema(path)  planned: validate against a declared schema
 validate_vocabulary(value)      planned v0.4: a term against a vocabulary
@@ -207,7 +208,8 @@ validate_shacl(path)            planned v0.4: SHACL over RDF metadata
 
 `list_fair_rules`, `get_fair_indicator`, `list_fair_principles`, and
 `get_fair_principle` are available from `fair-rules` upward;
-`run_fair_check`, `assess_fair_principles`, `get_fair_recommendations`, and
+`run_fair_check`, `assess_fair_principles`, `get_fair_recommendations`,
+`plan_fair_publication`, and
 `validate_identifier` only from
 `fair-deterministic`. That is the whole difference between the two conditions:
 in `fair-rules` the agent can read every rule but must apply it itself.

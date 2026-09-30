@@ -66,6 +66,7 @@ _FAIR_CHECK_TOOLS = (
     "validate_identifier",
     "assess_fair_principles",
     "get_fair_recommendations",
+    "plan_fair_publication",
 )
 
 # A per-file record is the resource form of inspect_file, so raw may serve it.
