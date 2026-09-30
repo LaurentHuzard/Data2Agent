@@ -119,8 +119,8 @@ async def test_calling_inspect_table_over_mcp_returns_the_profile(server):
 async def test_row_tool_descriptions_distinguish_slicing_from_filtering(server):
     tools = {tool.name: tool for tool in await server.list_tools()}
 
-    read_description = tools["read_rows"].description or ""
-    filter_description = tools["filter_rows"].description or ""
+    read_description = " ".join((tools["read_rows"].description or "").split())
+    filter_description = " ".join((tools["filter_rows"].description or "").split())
 
     assert "offset/limit only" in read_description
     assert "does not apply predicates" in read_description
