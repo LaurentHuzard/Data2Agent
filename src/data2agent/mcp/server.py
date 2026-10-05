@@ -231,6 +231,10 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
     ) -> dict[str, Any]:
         """Read a bounded slice of actual observations from a profiled table.
 
+        This tool reads by offset/limit only. It does not apply predicates or
+        filter conditions. When rows must satisfy conditions on column values,
+        use filter_rows instead.
+
         Values come from the immutable source bytes after checksum verification.
         Missing sentinels are normalised under the same convention used at
         ingest, with the original sentinel retained in the row's missing map.
@@ -245,6 +249,10 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
         limit: int = 100,
     ) -> dict[str, Any]:
         """Filter observations with a closed operator registry.
+
+        Use this tool whenever returned rows must satisfy one or more conditions
+        on column values. Unlike read_rows, this tool applies the supplied
+        predicates before returning observations.
 
         Supported operators are deterministic data comparisons only; no Python,
         SQL, regex execution, or free-form expression language is accepted.

@@ -118,7 +118,8 @@ async def test_calling_inspect_table_over_mcp_returns_the_profile(server):
 @pytest.mark.anyio
 async def test_tool_input_schemas_are_closed(server):
     for tool in await server.list_tools():
-        assert tool.inputSchema.get("additionalProperties") is False
+        schema = tool.model_dump(by_alias=True)["inputSchema"]
+        assert schema.get("additionalProperties") is False
 
 
 @pytest.mark.anyio
@@ -137,6 +138,22 @@ async def test_unknown_tool_argument_is_rejected_before_execution(server):
                 "filters": [{"column": "animal_id", "op": "eq", "value": "A002"}],
             },
         )
+
+
+@pytest.mark.anyio
+async def test_row_tool_descriptions_distinguish_slicing_from_filtering(server):
+    tools = {tool.name: tool for tool in await server.list_tools()}
+
+    read_description = " ".join((tools["read_rows"].description or "").split())
+    filter_description = " ".join((tools["filter_rows"].description or "").split())
+
+    assert "offset/limit only" in read_description
+    assert "does not apply predicates" in read_description
+    assert "use filter_rows instead" in read_description
+
+    assert "must satisfy one or more conditions" in filter_description
+    assert "applies the supplied predicates" in filter_description
+    assert "Unlike read_rows" in filter_description
 
 
 @pytest.mark.anyio
@@ -170,15 +187,28 @@ async def test_calling_filter_rows_over_mcp_selects_a_group(server):
 
 @pytest.mark.anyio
 async def test_query_validation_error_is_readable_over_mcp(server):
-    result = await server.call_tool(
-        "filter_rows",
-        {
-            "path": "animals.csv",
-            "filters": [{"column": "session", "op": "eq", "value": 2}],
-            "columns": ["animal_id", "session"],
-            "limit": 2,
-        },
-    )
+    try:
+        result = await server.call_tool(
+            "filter_rows",
+            {
+                "path": "animals.csv",
+                "filters": [{"column": "session", "op": "eq", "value": 2}],
+                "columns": ["animal_id", "session"],
+                "limit": 2,
+            },
+        )
+    except Exception as error:
+        # SDK 2.x raises anticipated tool failures for in-process calls;
+        # SDK 1.x returns an isError content result. Both must expose the cause.
+        try:
+            from mcp.server.mcpserver.exceptions import ToolError
+        except ImportError:
+            from mcp.server.fastmcp.exceptions import ToolError
+        assert isinstance(error, ToolError)
+        assert "unknown column(s) for 'animals.csv'" in str(error)
+        assert "session" in str(error)
+        assert "available columns" in str(error)
+        return
 
     is_error = getattr(result, "is_error", None)
     if is_error is not None:
@@ -207,6 +237,10 @@ async def test_calling_aggregate_over_mcp_returns_group_statistics(server):
     groups = {item["group"]["genotype"]: item["metrics"] for item in payload["groups"]}
     assert groups["KO"]["n"] == 24
     assert groups["WT"]["n"] == 24
+    contributor = payload["provenance"]["inputs"][0]
+    assert contributor["complete"] is True
+    assert contributor["backing_file"] == "animals.csv"
+    assert contributor["included_source_row_ranges"] == [[2, 49]]
 
 
 @pytest.mark.anyio
