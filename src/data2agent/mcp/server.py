@@ -23,7 +23,7 @@ _MCP_IMPORT_HINT = (
 )
 
 
-def _server_class() -> Any:
+def _base_server_class() -> Any:
     """Return the SDK's server class, across the 1.x/2.x rename.
 
     ``FastMCP`` became ``MCPServer`` in mcp 2.x. The decorator API we rely on is
@@ -67,6 +67,48 @@ def _expose_query_errors(function: Any) -> Any:
             raise _tool_error_class()(str(error)) from None
 
     return wrapped
+
+
+def _tool_input_schema(tool: Any) -> dict[str, Any]:
+    """Return the mutable input schema across MCP SDK 1.x/2.x field naming."""
+
+    for name in ("input_schema", "inputSchema"):
+        schema = getattr(tool, name, None)
+        if isinstance(schema, dict):
+            return schema
+    raise RuntimeError("MCP tool does not expose an input schema")
+
+
+def _server_class() -> Any:
+    """Return a Data2Agent server that keeps published and executed args identical."""
+
+    base = _base_server_class()
+
+    class Data2AgentServer(base):
+        async def list_tools(self) -> list[Any]:
+            tools = await super().list_tools()
+            for tool in tools:
+                _tool_input_schema(tool)["additionalProperties"] = False
+            return tools
+
+        async def call_tool(self, name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+            if isinstance(arguments, dict):
+                tools = {tool.name: tool for tool in await self.list_tools()}
+                tool = tools.get(name)
+                if tool is not None:
+                    schema = _tool_input_schema(tool)
+                    properties = schema.get("properties")
+                    allowed = set(properties) if isinstance(properties, dict) else set()
+                    unknown = sorted(set(arguments) - allowed)
+                    if unknown:
+                        ToolError = _tool_error_class()
+                        raise ToolError(
+                            f"unknown argument(s) for tool '{name}': {unknown}; "
+                            f"allowed arguments: {sorted(allowed)}"
+                        )
+            return await super().call_tool(name, arguments, *args, **kwargs)
+
+    return Data2AgentServer
 
 
 def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
