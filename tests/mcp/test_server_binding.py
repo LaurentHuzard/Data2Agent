@@ -116,6 +116,22 @@ async def test_calling_inspect_table_over_mcp_returns_the_profile(server):
 
 
 @pytest.mark.anyio
+async def test_row_tool_descriptions_distinguish_slicing_from_filtering(server):
+    tools = {tool.name: tool for tool in await server.list_tools()}
+
+    read_description = " ".join((tools["read_rows"].description or "").split())
+    filter_description = " ".join((tools["filter_rows"].description or "").split())
+
+    assert "offset/limit only" in read_description
+    assert "does not apply predicates" in read_description
+    assert "use filter_rows instead" in read_description
+
+    assert "must satisfy one or more conditions" in filter_description
+    assert "applies the supplied predicates" in filter_description
+    assert "Unlike read_rows" in filter_description
+
+
+@pytest.mark.anyio
 async def test_calling_read_rows_over_mcp_returns_observations(server):
     result = await server.call_tool(
         "read_rows",
