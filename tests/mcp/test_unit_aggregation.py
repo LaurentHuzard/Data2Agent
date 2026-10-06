@@ -265,3 +265,63 @@ def test_drifted_registry_withholds_the_join_aggregate(tmp_path: Path):
     assert payload["groups"] == []
     assert "right" in payload["content_withheld"]
     assert payload["inputs"]["right"]["integrity"]["matches"] is False
+
+
+def test_provenance_names_its_scope_and_lists_rows_with_missing_values(service):
+    payload = service.aggregate(
+        "behaviour.csv", metrics=[{"op": "mean", "column": "dur (s)", "name": "mean_dur"}]
+    )
+
+    # B/2/2 is NA and D/1/1 is empty: the mean ignores them, the provenance lists them.
+    assert payload["groups"][0]["metrics"]["mean_dur"] == pytest.approx(85 / 8)
+    provenance = payload["provenance"]
+    assert provenance["scope"] == "post_filter_pre_metric"
+    assert provenance["complete"] is True
+    assert provenance["inputs"][0]["row_occurrences_entering_aggregation"] == 10
+
+
+def test_provenance_is_incomplete_when_unit_policy_excludes_rows(service):
+    payload = service.aggregate(
+        "behaviour.csv",
+        group_by=["day"],
+        unit=["animal"],
+        unit_metrics=[{"op": "sum", "column": "dur (s)", "name": "total"}],
+        metrics=[{"op": "mean", "column": "total", "name": "mean_total"}],
+        on_inconsistent_unit="exclude",
+    )
+
+    # Animals A and B span two days, so their 7 rows feed no group.
+    assert payload["analysis_unit"]["excluded_inconsistent_units"] == 2
+    provenance = payload["provenance"]
+    assert provenance["complete"] is False
+    assert provenance["rows_dropped_by_unit_policy"] == 7
+    contributor = provenance["inputs"][0]
+    assert contributor["complete"] is False
+    assert "7 listed row(s) fed no group" in contributor["reason"]
+
+
+def test_provenance_is_incomplete_when_the_aggregation_is_refused(service):
+    payload = service.aggregate(
+        "behaviour.csv",
+        group_by=["day"],
+        unit=["animal"],
+        unit_metrics=[{"op": "sum", "column": "dur (s)", "name": "total"}],
+        metrics=[{"op": "mean", "column": "total", "name": "mean_total"}],
+    )
+
+    assert payload["analysis_unit"]["status"] == "refused"
+    assert payload["provenance"]["complete"] is False
+    assert payload["provenance"]["rows_dropped_by_unit_policy"] == 10
+
+
+def test_provenance_stays_complete_when_every_unit_feeds_a_group(service):
+    payload = service.aggregate(
+        "behaviour.csv",
+        group_by=["day"],
+        unit=["animal", "day"],
+        unit_metrics=[{"op": "sum", "column": "dur (s)", "name": "total"}],
+        metrics=[{"op": "mean", "column": "total", "name": "mean_total"}],
+    )
+
+    assert payload["provenance"]["complete"] is True
+    assert payload["provenance"]["rows_dropped_by_unit_policy"] == 0

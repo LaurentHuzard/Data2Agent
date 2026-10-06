@@ -154,10 +154,7 @@ def probe_public_url(value: str, *, expected_identifier: str | None = None) -> d
         for _ in range(_MAX_REDIRECTS + 1):
             response = _fetch_once(current)
             chain.append(
-                {
-                    key: response[key]
-                    for key in ("url", "status_code", "location", "content_type")
-                }
+                {key: response[key] for key in ("url", "status_code", "location", "content_type")}
             )
             if response["status_code"] in {301, 302, 303, 307, 308}:
                 location = response["location"]

@@ -61,6 +61,9 @@ _MAX_ABOVE_CELLS = 512
 _MAX_FILTER_SCAN_ROWS = 100_000
 _MAX_COMPLETE_QUERY_ROWS = 100_000
 _MAX_JOIN_SCAN_ROWS = 50_000
+# Contributor provenance stays exact when compact enough to fit normal MCP results.
+_MAX_PROVENANCE_RANGES = 4096
+_MAX_PROVENANCE_LOCATORS = 1024
 # The resolved join key is carried through query.join_rows in a synthetic
 # column. A NUL cannot occur in a header the readers surface, so it cannot
 # shadow a real column; it is stripped before any row is returned.
@@ -532,6 +535,10 @@ class DatasetService:
         Without ``unit`` every row is an observation. With ``unit`` the rows are
         first reduced to one record per unit by ``unit_metrics`` and ``metrics``
         then summarise units -- see :mod:`data2agent.query.units`.
+
+        ``provenance`` lists the rows that entered the aggregation after the
+        filters (scope ``post_filter_pre_metric``). It is absent when the backing
+        file no longer matches its recorded checksum: absence is not completeness.
         """
         groups = list(group_by or [])
         rules = list(filters or [])
@@ -587,19 +594,30 @@ class DatasetService:
             payload.update({"groups": [], "content_withheld": context["content_withheld"]})
             return payload
 
-        payload.update(
-            _summarise(
-                rows,
-                dtypes=dtypes,
-                group_by=groups,
-                metrics=metrics,
-                filters=rules,
-                unit=unit_columns,
-                unit_metrics=stage_one,
-                on_inconsistent_unit=on_inconsistent_unit,
-                unit_sample=unit_sample,
-            )
+        rows = _select_aggregate_rows(rows, rules)
+        summary = _summarise(
+            rows,
+            dtypes=dtypes,
+            group_by=groups,
+            metrics=metrics,
+            filters=[],
+            unit=unit_columns,
+            unit_metrics=stage_one,
+            on_inconsistent_unit=on_inconsistent_unit,
+            unit_sample=unit_sample,
         )
+        payload["provenance"] = _aggregate_provenance(
+            [
+                _contributor_input(
+                    path,
+                    context,
+                    [row.get("source_row") for row in rows],
+                    expected_rows=len(rows),
+                )
+            ],
+            _rows_dropped_by_unit_policy(summary, len(rows)),
+        )
+        payload.update(summary)
         return payload
 
     def aggregate_join(
@@ -879,20 +897,39 @@ class DatasetService:
             rows, _ = query.filter_rows(rows, rules, limit=len(rows))
         if mapped:
             payload["aggregation_key_mapping"] = _aggregation_mapping_counts(rows)
-        payload.update(
-            _summarise(
-                rows,
-                dtypes=dtypes,
-                group_by=groups,
-                metrics=metrics,
-                filters=[],
-                unit=unit_columns,
-                unit_metrics=stage_one,
-                on_inconsistent_unit=on_inconsistent_unit,
-                unit_sample=unit_sample,
-                listed_columns=["key.left_form", "key.right_form"] if by_canonical else None,
-            )
+        summary = _summarise(
+            rows,
+            dtypes=dtypes,
+            group_by=groups,
+            metrics=metrics,
+            filters=[],
+            unit=unit_columns,
+            unit_metrics=stage_one,
+            on_inconsistent_unit=on_inconsistent_unit,
+            unit_sample=unit_sample,
+            listed_columns=["key.left_form", "key.right_form"] if by_canonical else None,
         )
+        payload["provenance"] = _aggregate_provenance(
+            [
+                _contributor_input(
+                    left,
+                    left_context,
+                    [row.get("source_row", {}).get("left") for row in rows],
+                    expected_rows=len(rows),
+                ),
+                _contributor_input(
+                    right,
+                    right_context,
+                    [
+                        row.get("source_row", {}).get("right")
+                        for row in rows
+                        if row.get("source_row", {}).get("right") is not None
+                    ],
+                ),
+            ],
+            _rows_dropped_by_unit_policy(summary, len(rows)),
+        )
+        payload.update(summary)
         return payload
 
     def describe_variable(self, path: str, column: str) -> dict[str, Any]:
@@ -1558,9 +1595,7 @@ class DatasetService:
         probe = None
         binding = False
         if live and publication_url:
-            f1 = next(
-                item for item in narrow["results"] if item["rule_id"] == "F1-PID-METADATA"
-            )
+            f1 = next(item for item in narrow["results"] if item["rule_id"] == "F1-PID-METADATA")
             identifiers = f1.get("observations", {}).get("identifiers", [])
             matched_doi = matching_declared_doi(publication_url, identifiers)
             binding = matched_doi is not None
@@ -1586,9 +1621,7 @@ class DatasetService:
         narrow = self.run_fair_check(rule_id)
         catalog = build_recommendations(narrow)
         item_ids = [
-            item["id"]
-            for item in PRINCIPLES
-            if rule_id is None or rule_id in item["local_rules"]
+            item["id"] for item in PRINCIPLES if rule_id is None or rule_id in item["local_rules"]
         ]
         principle_results = [
             assess_principles(narrow, identifier, unpublished=unpublished)["results"][0]
@@ -1658,9 +1691,7 @@ class DatasetService:
 
         verification = self.verify_dataset()
         if not verification["intact"]:
-            changed = ", ".join(
-                sorted(item["path"] for item in verification["mismatched"])
-            )
+            changed = ", ".join(sorted(item["path"] for item in verification["mismatched"]))
             raise OutputError(
                 f"FAIR assessment cannot use changed or missing source files: {changed}; "
                 "re-ingest the dataset before reassessing"
@@ -2344,6 +2375,175 @@ def _resolve_join_keys(
     return key_mapping, reasons
 
 
+def _select_aggregate_rows(
+    rows: list[dict[str, Any]], filters: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return exactly the observation rows that enter an aggregate."""
+
+    if not filters:
+        return rows
+    selected, _ = query.filter_rows(rows, filters, limit=len(rows))
+    return selected
+
+
+def _integer_ranges(values: list[int]) -> list[list[int]]:
+    """Compress unique integer locators into inclusive ranges."""
+
+    ordered = sorted(set(values))
+    if not ordered:
+        return []
+    ranges: list[list[int]] = []
+    start = previous = ordered[0]
+    for value in ordered[1:]:
+        if value == previous + 1:
+            previous = value
+            continue
+        ranges.append([start, previous])
+        start = previous = value
+    ranges.append([start, previous])
+    return ranges
+
+
+def _bounded_contributor_locators(
+    locators: list[Any], expected_rows: int | None = None
+) -> dict[str, Any]:
+    """Encode exact source locators when they remain compact and deterministic.
+
+    ``expected_rows`` is how many rows should each have carried a locator; a
+    shortfall means some rows cannot be located, so the result is not complete.
+    """
+
+    present = [locator for locator in locators if locator is not None]
+    occurrence_count = len(present)
+    if expected_rows is not None and occurrence_count != expected_rows:
+        return {
+            "complete": False,
+            "row_occurrences_entering_aggregation": occurrence_count,
+            "unique_source_rows": None,
+            "locator_encoding": "unavailable",
+            "reason": (
+                f"{expected_rows - occurrence_count} of {expected_rows} row(s) carry no "
+                "source-row locator"
+            ),
+        }
+    if all(type(locator) is int for locator in present):
+        ranges = _integer_ranges(present)
+        result: dict[str, Any] = {
+            "row_occurrences_entering_aggregation": occurrence_count,
+            "unique_source_rows": len(set(present)),
+            "locator_encoding": "inclusive_integer_ranges",
+        }
+        if len(ranges) > _MAX_PROVENANCE_RANGES:
+            return {
+                **result,
+                "complete": False,
+                "included_source_row_ranges": [],
+                "reason": (
+                    "exact contributor provenance exceeds the "
+                    f"{_MAX_PROVENANCE_RANGES}-range output cap"
+                ),
+            }
+        return {**result, "complete": True, "included_source_row_ranges": ranges}
+
+    if all(isinstance(locator, dict) for locator in present):
+        unique: dict[str, dict[str, Any]] = {}
+        for locator in present:
+            key = json.dumps(
+                locator,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            unique[key] = locator
+        result = {
+            "row_occurrences_entering_aggregation": occurrence_count,
+            "unique_source_rows": len(unique),
+            "locator_encoding": "exact_objects",
+        }
+        if len(unique) > _MAX_PROVENANCE_LOCATORS:
+            return {
+                **result,
+                "complete": False,
+                "included_source_locators": [],
+                "reason": (
+                    "exact contributor provenance exceeds the "
+                    f"{_MAX_PROVENANCE_LOCATORS}-locator output cap"
+                ),
+            }
+        return {
+            **result,
+            "complete": True,
+            "included_source_locators": [unique[key] for key in sorted(unique)],
+        }
+
+    return {
+        "complete": False,
+        "row_occurrences_entering_aggregation": occurrence_count,
+        "unique_source_rows": None,
+        "locator_encoding": "unsupported_mixed_locator_types",
+        "reason": "contributor source locators use unsupported mixed types",
+    }
+
+
+def _contributor_input(
+    table: str,
+    context: dict[str, Any],
+    locators: list[Any],
+    expected_rows: int | None = None,
+) -> dict[str, Any]:
+    """Provenance of the rows of one input that enter an aggregation, without rereading bytes."""
+
+    return {
+        "table": table,
+        "backing_file": context.get("backing_file"),
+        "backing_sha256": context.get("backing_sha256"),
+        "row_locator": context.get("row_locator"),
+        **_bounded_contributor_locators(locators, expected_rows),
+    }
+
+
+def _rows_dropped_by_unit_policy(summary: dict[str, Any], entered_rows: int) -> int:
+    """Rows that entered a unit aggregation but fed no group, by unit policy.
+
+    Rows naming no unit, rows of units excluded as inconsistent, and every row of
+    a refused aggregation are listed in the provenance ranges yet feed no number.
+    """
+
+    analysis = summary.get("analysis_unit")
+    if analysis is None:
+        return 0
+    if analysis.get("status") != "computed":
+        return entered_rows
+    return entered_rows - sum(group["n_rows"] for group in summary["groups"])
+
+
+def _aggregate_provenance(
+    inputs: list[dict[str, Any]], rows_dropped_by_unit_policy: int = 0
+) -> dict[str, Any]:
+    """Provenance of the rows entering an aggregation.
+
+    The scope is explicit because the ranges are not per-metric membership: a
+    row with a missing value is still listed, and counts toward ``n_missing``
+    rather than the metric. ``complete`` is true only when every input is exact
+    and no unit policy kept a listed row out of the result.
+    """
+
+    if rows_dropped_by_unit_policy:
+        reason = (
+            f"{rows_dropped_by_unit_policy} listed row(s) fed no group: rows without a unit, "
+            "inconsistent units excluded by policy, or a refused aggregation"
+        )
+        inputs = [
+            {**item, "complete": False, "reason": item.get("reason") or reason} for item in inputs
+        ]
+    return {
+        "scope": "post_filter_pre_metric",
+        "complete": all(item.get("complete") is True for item in inputs),
+        "rows_dropped_by_unit_policy": rows_dropped_by_unit_policy,
+        "inputs": inputs,
+    }
+
+
 def _summarise(
     rows: list[dict[str, Any]],
     *,
@@ -2362,9 +2562,7 @@ def _summarise(
     Filters run on rows, before any unit is formed: a filter selects
     observations, and a unit is whatever the selected observations of it are.
     """
-    selected = rows
-    if filters:
-        selected, _ = query.filter_rows(rows, filters, limit=len(rows))
+    selected = _select_aggregate_rows(rows, filters)
     used_ops = sorted(
         {
             str(metric.get("op"))

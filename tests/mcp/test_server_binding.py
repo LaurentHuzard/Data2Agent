@@ -108,15 +108,12 @@ async def test_foundation_items_are_individually_addressable_over_mcp(ingested):
     assert assessment["summary"] == {"total": 1, "pass": 0, "unknown": 1}
     assert assessment["results"][0]["principle"] == "F4"
     assert assessment["results"][0]["recommendations"]
-    recommendations = json.loads(
-        _text_of(await server.call_tool("get_fair_recommendations", {}))
-    )
+    recommendations = json.loads(_text_of(await server.call_tool("get_fair_recommendations", {})))
     assert recommendations["recommendations"]
     assert all(item["findings"] for item in recommendations["recommendations"])
     assert len(recommendations["principle_recommendations"]) == 15
     a2 = next(
-        item for item in recommendations["principle_recommendations"]
-        if item["principle"] == "A2"
+        item for item in recommendations["principle_recommendations"] if item["principle"] == "A2"
     )
     assert a2["result"] == "unknown"
     assert len(a2["unverified_requirements"]) == 3
@@ -154,18 +151,10 @@ async def test_opt_in_publication_probe_is_available_over_mcp(ingested, monkeypa
 @pytest.mark.anyio
 async def test_unpublished_guidance_is_available_over_mcp(ingested):
     server = build_server(DatasetService(ingested.output_dir, mode="fair-deterministic"))
-    result = await server.call_tool(
-        "get_fair_recommendations", {"unpublished": True}
-    )
+    result = await server.call_tool("get_fair_recommendations", {"unpublished": True})
     guidance = json.loads(_text_of(result))
-    f4 = next(
-        item for item in guidance["principle_recommendations"]
-        if item["principle"] == "F4"
-    )
-    assert any(
-        need["status"] == "pending_publication"
-        for need in f4["unverified_requirements"]
-    )
+    f4 = next(item for item in guidance["principle_recommendations"] if item["principle"] == "F4")
+    assert any(need["status"] == "pending_publication" for need in f4["unverified_requirements"])
 
 
 @pytest.mark.anyio
@@ -331,6 +320,10 @@ async def test_calling_aggregate_over_mcp_returns_group_statistics(server):
     groups = {item["group"]["genotype"]: item["metrics"] for item in payload["groups"]}
     assert groups["KO"]["n"] == 24
     assert groups["WT"]["n"] == 24
+    contributor = payload["provenance"]["inputs"][0]
+    assert contributor["complete"] is True
+    assert contributor["backing_file"] == "animals.csv"
+    assert contributor["included_source_row_ranges"] == [[2, 49]]
 
 
 @pytest.mark.anyio
