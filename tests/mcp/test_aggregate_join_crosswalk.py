@@ -119,9 +119,9 @@ def test_named_relationship_aggregates_per_canonical_animal(tmp_path: Path):
     provenance = {item["table"]: item for item in payload["provenance"]["inputs"]}
     assert payload["provenance"]["complete"] is True
     assert provenance["registry.csv"]["included_source_row_ranges"] == [[2, 4]]
-    assert provenance["registry.csv"]["contributing_row_occurrences"] == 6
+    assert provenance["registry.csv"]["row_occurrences_entering_aggregation"] == 6
     assert provenance["bins.csv"]["included_source_row_ranges"] == [[2, 7]]
-    assert provenance["bins.csv"]["contributing_row_occurrences"] == 6
+    assert provenance["bins.csv"]["row_occurrences_entering_aggregation"] == 6
     # The measurement side's unmapped spelling is reported on the table facts.
     assert payload["key_mapping"]["right"]["unmapped_rows"] == 1
     assert json.loads(json.dumps(payload, allow_nan=False)) == payload
