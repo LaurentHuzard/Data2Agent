@@ -56,6 +56,9 @@ _MAX_ABOVE_CELLS = 512
 _MAX_FILTER_SCAN_ROWS = 100_000
 _MAX_COMPLETE_QUERY_ROWS = 100_000
 _MAX_JOIN_SCAN_ROWS = 50_000
+# Contributor provenance stays exact when compact enough to fit normal MCP results.
+_MAX_PROVENANCE_RANGES = 4096
+_MAX_PROVENANCE_LOCATORS = 1024
 # The resolved join key is carried through query.join_rows in a synthetic
 # column. A NUL cannot occur in a header the readers surface, so it cannot
 # shadow a real column; it is stripped before any row is returned.
@@ -586,13 +589,23 @@ class DatasetService:
             payload.update({"groups": [], "content_withheld": context["content_withheld"]})
             return payload
 
+        rows = _select_aggregate_rows(rows, rules)
+        payload["provenance"] = _aggregate_provenance(
+            [
+                _contributor_input(
+                    path,
+                    context,
+                    [row.get("source_row") for row in rows],
+                )
+            ]
+        )
         payload.update(
             _summarise(
                 rows,
                 dtypes=dtypes,
                 group_by=groups,
                 metrics=metrics,
-                filters=rules,
+                filters=[],
                 unit=unit_columns,
                 unit_metrics=stage_one,
                 on_inconsistent_unit=on_inconsistent_unit,
@@ -878,6 +891,28 @@ class DatasetService:
             rows, _ = query.filter_rows(rows, rules, limit=len(rows))
         if mapped:
             payload["aggregation_key_mapping"] = _aggregation_mapping_counts(rows)
+        payload["provenance"] = _aggregate_provenance(
+            [
+                _contributor_input(
+                    left,
+                    left_context,
+                    [
+                        row.get("source_row", {}).get("left")
+                        for row in rows
+                        if row.get("source_row", {}).get("left") is not None
+                    ],
+                ),
+                _contributor_input(
+                    right,
+                    right_context,
+                    [
+                        row.get("source_row", {}).get("right")
+                        for row in rows
+                        if row.get("source_row", {}).get("right") is not None
+                    ],
+                ),
+            ]
+        )
         payload.update(
             _summarise(
                 rows,
@@ -2341,6 +2376,131 @@ def _resolve_join_keys(
     return key_mapping, reasons
 
 
+def _select_aggregate_rows(
+    rows: list[dict[str, Any]], filters: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return exactly the observation rows that enter an aggregate."""
+
+    if not filters:
+        return rows
+    selected, _ = query.filter_rows(rows, filters, limit=len(rows))
+    return selected
+
+
+def _integer_ranges(values: list[int]) -> list[list[int]]:
+    """Compress unique integer locators into inclusive ranges."""
+
+    ordered = sorted(set(values))
+    if not ordered:
+        return []
+    ranges: list[list[int]] = []
+    start = previous = ordered[0]
+    for value in ordered[1:]:
+        if value == previous + 1:
+            previous = value
+            continue
+        ranges.append([start, previous])
+        start = previous = value
+    ranges.append([start, previous])
+    return ranges
+
+
+def _bounded_contributor_locators(locators: list[Any]) -> dict[str, Any]:
+    """Encode exact source locators when they remain compact and deterministic."""
+
+    present = [locator for locator in locators if locator is not None]
+    occurrence_count = len(present)
+    if all(type(locator) is int for locator in present):
+        ranges = _integer_ranges(present)
+        result: dict[str, Any] = {
+            "contributing_row_occurrences": occurrence_count,
+            "unique_source_rows": len(set(present)),
+            "locator_encoding": "inclusive_integer_ranges",
+        }
+        if len(ranges) > _MAX_PROVENANCE_RANGES:
+            return {
+                **result,
+                "complete": False,
+                "included_source_row_ranges": [],
+                "reason": (
+                    "exact contributor provenance exceeds the "
+                    f"{_MAX_PROVENANCE_RANGES}-range output cap"
+                ),
+            }
+        return {**result, "complete": True, "included_source_row_ranges": ranges}
+
+    if all(isinstance(locator, dict) for locator in present):
+        unique: dict[str, dict[str, Any]] = {}
+        for locator in present:
+            key = json.dumps(
+                locator,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            unique[key] = locator
+        result = {
+            "contributing_row_occurrences": occurrence_count,
+            "unique_source_rows": len(unique),
+            "locator_encoding": "exact_objects",
+        }
+        if len(unique) > _MAX_PROVENANCE_LOCATORS:
+            return {
+                **result,
+                "complete": False,
+                "included_source_locators": [],
+                "reason": (
+                    "exact contributor provenance exceeds the "
+                    f"{_MAX_PROVENANCE_LOCATORS}-locator output cap"
+                ),
+            }
+        return {
+            **result,
+            "complete": True,
+            "included_source_locators": [unique[key] for key in sorted(unique)],
+        }
+
+    if not present:
+        return {
+            "complete": True,
+            "contributing_row_occurrences": 0,
+            "unique_source_rows": 0,
+            "locator_encoding": "inclusive_integer_ranges",
+            "included_source_row_ranges": [],
+        }
+
+    return {
+        "complete": False,
+        "contributing_row_occurrences": occurrence_count,
+        "unique_source_rows": None,
+        "locator_encoding": "unsupported_mixed_locator_types",
+        "reason": "contributor source locators use unsupported mixed types",
+    }
+
+
+def _contributor_input(
+    table: str, context: dict[str, Any], locators: list[Any]
+) -> dict[str, Any]:
+    """Contributor provenance for one aggregate input without rereading source bytes."""
+
+    return {
+        "table": table,
+        "backing_file": context.get("backing_file"),
+        "backing_sha256": context.get("backing_sha256"),
+        "row_locator": context.get("row_locator"),
+        **_bounded_contributor_locators(locators),
+    }
+
+
+def _aggregate_provenance(inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate contributor provenance, complete only when every input is exact."""
+
+    return {
+        "complete": all(item.get("complete") is True for item in inputs),
+        "inputs": inputs,
+    }
+
+
 def _summarise(
     rows: list[dict[str, Any]],
     *,
@@ -2359,9 +2519,7 @@ def _summarise(
     Filters run on rows, before any unit is formed: a filter selects
     observations, and a unit is whatever the selected observations of it are.
     """
-    selected = rows
-    if filters:
-        selected, _ = query.filter_rows(rows, filters, limit=len(rows))
+    selected = _select_aggregate_rows(rows, filters)
     used_ops = sorted(
         {
             str(metric.get("op"))
