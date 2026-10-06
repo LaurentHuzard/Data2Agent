@@ -42,8 +42,7 @@ _OPTIONS = [
     {
         "id": "published_restricted",
         "use_when": (
-            "The owner approves public record metadata and depositing files, "
-            "but not public files."
+            "The owner approves public record metadata and depositing files, but not public files."
         ),
         "visibility": "Metadata public; files restricted; DOI registered.",
         "fair_implication": (
@@ -200,7 +199,9 @@ def advise_publication(
         path = (
             "published_embargoed"
             if embargo_until
-            else "published_public" if files_public_approved else "published_restricted"
+            else "published_public"
+            if files_public_approved
+            else "published_restricted"
         )
         reasons.append(
             "This is a candidate route from supplied decisions, not a release approval "
