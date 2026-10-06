@@ -9,6 +9,7 @@ allowed to accumulate below the MCP boundary.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -160,14 +161,14 @@ def _server_class() -> Any:
 
         async def _tools_by_name(self) -> dict[str, Any]:
             if self._closed_tools is None:
-                tools = await super().list_tools()
+                tools = deepcopy(await super().list_tools())
                 for tool in tools:
                     _close_tool_schema(tool)
                 self._closed_tools = {tool.name: tool for tool in tools}
             return self._closed_tools
 
         async def list_tools(self) -> list[Any]:
-            return list((await self._tools_by_name()).values())
+            return deepcopy(list((await self._tools_by_name()).values()))
 
         async def call_tool(
             self, name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any

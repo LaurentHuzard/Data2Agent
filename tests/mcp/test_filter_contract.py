@@ -204,3 +204,47 @@ def test_unknown_column_stays_a_key_error_and_a_value_error(ingested):
     assert isinstance(error, ValueError)
     assert str(error).startswith("unknown column(s) for 'animals.csv'")
     assert not str(error).startswith("'")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "tool,arguments,expected",
+    [
+        ("describe_variable", {"path": "animals.csv", "column": "bogus"}, "available columns"),
+        (
+            "aggregate_join",
+            {"relationship_id": "bogus", "metrics": [{"op": "count"}]},
+            "relationships have not been determined",
+        ),
+    ],
+)
+async def test_query_lookup_diagnostics_remain_visible(ingested, tool, arguments, expected):
+    server = build_server(DatasetService(ingested.output_dir))
+    assert expected in await error_text(server, tool, arguments)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("op", [[], {}, None, 4])
+@pytest.mark.parametrize("unit_stage", [False, True])
+async def test_malformed_metric_operator_is_actionable(ingested, op, unit_stage):
+    service = DatasetService(ingested.output_dir)
+    arguments = {"path": "animals.csv", "metrics": [{"op": op}]}
+    if unit_stage:
+        arguments.update(unit=["animal_id"], unit_metrics=[{"op": op}], metrics=[{"op": "count"}])
+    original = copy.deepcopy(arguments)
+    server = build_server(service)
+    assert "unsupported op" in await error_text(server, "aggregate", arguments)
+    assert arguments == original
+
+
+@pytest.mark.anyio
+async def test_schema_consumers_cannot_change_cached_dispatch(ingested):
+    from data2agent.mcp.server import _tool_input_schema
+
+    server = build_server(DatasetService(ingested.output_dir))
+    first = next(t for t in await server.list_tools() if t.name == "read_rows")
+    _tool_input_schema(first)["properties"].clear()
+    second = next(t for t in await server.list_tools() if t.name == "read_rows")
+    assert "path" in _tool_input_schema(second)["properties"]
+    text = await error_text(server, "read_rows", {"path": "animals.csv", "bogus": 1})
+    assert "unknown argument" in text and "path" in text

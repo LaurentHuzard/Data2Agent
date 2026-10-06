@@ -900,7 +900,7 @@ class DatasetService:
         profile = self._table_profile(path)
         columns = {item["name"]: item for item in profile.get("columns", [])}
         if column not in columns:
-            raise KeyError(
+            raise QueryLookupError(
                 f"unknown column {column!r} for '{path}'; available columns: {list(columns)}"
             )
 
@@ -1222,13 +1222,13 @@ class DatasetService:
         """Return one saved relationship record by stable id."""
         listing = self.list_relationships()
         if not listing["determined"]:
-            raise KeyError("relationships have not been determined for this dataset")
+            raise QueryLookupError("relationships have not been determined for this dataset")
         if listing.get("content_withheld"):
             raise OutputError(listing["content_withheld"])
         for record in listing["relationships"]:
             if record.get("id") == relationship_id:
                 return {"dataset_id": self.dataset_id, "relationship": record}
-        raise KeyError(f"no relationship with id {relationship_id!r}")
+        raise QueryLookupError(f"no relationship with id {relationship_id!r}")
 
     def join_relationship(
         self,
@@ -2369,7 +2369,9 @@ def _summarise(
         {
             str(metric.get("op"))
             for metric in [*metrics, *unit_metrics]
-            if isinstance(metric, dict) and metric.get("op") in query.AGGREGATES
+            if isinstance(metric, dict)
+            and isinstance(metric.get("op"), str)
+            and metric.get("op") in query.AGGREGATES
         }
     )
     summary: dict[str, Any] = {

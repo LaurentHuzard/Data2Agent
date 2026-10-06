@@ -358,7 +358,7 @@ def validate_metrics(
             )
         op = metric.get("op")
         column = metric.get("column")
-        if op not in AGGREGATES:
+        if not isinstance(op, str) or op not in AGGREGATES:
             raise QueryValidationError(
                 f"metric {index} has unsupported op {op!r}; choose from {sorted(AGGREGATES)}"
             )

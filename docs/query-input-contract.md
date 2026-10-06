@@ -40,6 +40,12 @@ The MCP binding exposes these anticipated diagnoses. Covered, for `read_rows`,
 - refused many-to-many joins and joins above the complete-scan cap;
 - aggregate unit and output-name mismatches.
 
+`describe_variable` also exposes unknown-column diagnoses, and relationship
+lookups expose missing or undetermined relationships (including through
+`aggregate_join`). Malformed metric operators receive explicit validation errors.
+The schema cache is built once from copies of SDK tools; `list_tools` returns
+independent copies so in-process consumers cannot modify subsequent dispatch.
+
 Not covered: tools outside the query path (relationship building and listing,
 FAIR assessment, metadata and evidence lookups, `inspect_table`'s `KeyError`
 for an unknown path) still raise plain exceptions, which an SDK may report as a
