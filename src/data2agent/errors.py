@@ -27,3 +27,15 @@ class QueryError(Data2AgentError):
 
 class QueryValidationError(QueryError, ValueError):
     """An anticipated query rejection, safe to expose and still a ValueError."""
+
+
+class QueryLookupError(QueryValidationError, KeyError):
+    """A query names a table, column or crosswalk the dataset does not have.
+
+    Also a KeyError (and, through QueryValidationError, a ValueError) so callers
+    that caught the KeyError these lookups used to raise keep working.
+    """
+
+    def __str__(self) -> str:
+        # KeyError.__str__ would repr() the message; clients need it readable.
+        return BaseException.__str__(self)

@@ -351,6 +351,11 @@ def validate_metrics(
     for index, metric in enumerate(metrics):
         if not isinstance(metric, dict):
             raise QueryValidationError(f"metric {index} must be an object")
+        unknown = sorted(set(metric) - {"op", "column", "name"})
+        if unknown:
+            raise QueryValidationError(
+                f"metric {index} has unknown keys {unknown}; use op, column, name"
+            )
         op = metric.get("op")
         column = metric.get("column")
         if op not in AGGREGATES:

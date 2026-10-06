@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import QueryError
-from ..query.operations import FILTER_OPERATORS, _validate_filters
+from ..query.operations import AGGREGATES, FILTER_OPERATORS, _validate_filters
 from .modes import DEFAULT_MODE
 from .service import DatasetService
 
@@ -80,73 +80,123 @@ def _tool_input_schema(tool: Any) -> dict[str, Any]:
     raise RuntimeError("MCP tool does not expose an input schema")
 
 
+_FILTER_TOOLS = frozenset({"filter_rows", "aggregate", "aggregate_join"})
+_METRIC_TOOLS = frozenset({"aggregate", "aggregate_join"})
+
+
+def _array_schema(property_schema: dict[str, Any]) -> dict[str, Any]:
+    """The array branch of an optional-or-array property schema."""
+    return next(
+        (item for item in property_schema.get("anyOf", []) if item.get("type") == "array"),
+        property_schema,
+    )
+
+
+def _filter_item_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["column", "op"],
+        "allOf": [
+            {
+                "if": {"properties": {"op": {"enum": ["is_missing", "is_not_missing"]}}},
+                "else": {"required": ["value"]},
+            },
+            {
+                "if": {"properties": {"op": {"enum": ["in", "not_in"]}}},
+                "then": {"properties": {"value": {"type": "array"}}},
+            },
+        ],
+        "properties": {
+            "column": {"type": "string", "minLength": 1},
+            "op": {"type": "string", "enum": sorted(FILTER_OPERATORS)},
+            "value": {
+                "description": "Required except for is_missing/is_not_missing; "
+                "in/not_in require an array. Values are compared without coercion."
+            },
+        },
+    }
+
+
+def _metric_item_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["op"],
+        "properties": {
+            "op": {"type": "string", "enum": sorted(AGGREGATES)},
+            "column": {
+                "type": ["string", "null"],
+                "description": "Required for every op except count, which takes none.",
+            },
+            "name": {"type": "string", "description": "Output name; defaults to op[:column]."},
+        },
+    }
+
+
+def _close_tool_schema(tool: Any) -> None:
+    """Close one tool's published schema: no unknown arguments, filter or metric keys."""
+    schema = _tool_input_schema(tool)
+    schema["additionalProperties"] = False
+    properties = schema.get("properties", {})
+    if tool.name in _FILTER_TOOLS:
+        _array_schema(properties["filters"])["items"] = _filter_item_schema()
+    if tool.name in _METRIC_TOOLS:
+        for key in ("metrics", "unit_metrics"):
+            if key in properties:
+                _array_schema(properties[key])["items"] = _metric_item_schema()
+
+
 def _server_class() -> Any:
     """Return a Data2Agent server that keeps published and executed args identical."""
 
     base = _base_server_class()
 
     class Data2AgentServer(base):
+        # Closed once, on first use: build_server registers every tool before the
+        # server is served, so the published schemas never need closing again and
+        # call_tool never mutates shared SDK state.
+        _closed_tools: dict[str, Any] | None = None
+
+        async def _tools_by_name(self) -> dict[str, Any]:
+            if self._closed_tools is None:
+                tools = await super().list_tools()
+                for tool in tools:
+                    _close_tool_schema(tool)
+                self._closed_tools = {tool.name: tool for tool in tools}
+            return self._closed_tools
+
         async def list_tools(self) -> list[Any]:
-            tools = await super().list_tools()
-            for tool in tools:
-                _tool_input_schema(tool)["additionalProperties"] = False
-                if tool.name in {"filter_rows", "aggregate", "aggregate_join"}:
-                    filters = _tool_input_schema(tool)["properties"]["filters"]
-                    array = next(
-                        (item for item in filters.get("anyOf", []) if item.get("type") == "array"),
-                        filters,
-                    )
-                    array["items"] = {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["column", "op"],
-                        "allOf": [
-                            {
-                                "if": {
-                                    "properties": {"op": {"enum": ["is_missing", "is_not_missing"]}}
-                                },
-                                "else": {"required": ["value"]},
-                            },
-                            {
-                                "if": {"properties": {"op": {"enum": ["in", "not_in"]}}},
-                                "then": {"properties": {"value": {"type": "array"}}},
-                            },
-                        ],
-                        "properties": {
-                            "column": {"type": "string", "minLength": 1},
-                            "op": {"type": "string", "enum": sorted(FILTER_OPERATORS)},
-                            "value": {
-                                "description": "Required except for is_missing/is_not_missing; "
-                                "in/not_in require an array. Values are compared without coercion."
-                            },
-                        },
-                    }
-            return tools
+            return list((await self._tools_by_name()).values())
 
         async def call_tool(
             self, name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any
         ) -> Any:
             if isinstance(arguments, dict):
-                tools = {tool.name: tool for tool in await self.list_tools()}
-                tool = tools.get(name)
+                tool = (await self._tools_by_name()).get(name)
                 if tool is not None:
+                    ToolError = _tool_error_class()
                     schema = _tool_input_schema(tool)
                     properties = schema.get("properties")
                     allowed = set(properties) if isinstance(properties, dict) else set()
                     unknown = sorted(set(arguments) - allowed)
                     if unknown:
-                        ToolError = _tool_error_class()
                         raise ToolError(
                             f"unknown argument(s) for tool '{name}': {unknown}; "
                             f"allowed arguments: {sorted(allowed)}"
                         )
-                    if name in {"filter_rows", "aggregate", "aggregate_join"}:
+                    missing = [key for key in schema.get("required", []) if key not in arguments]
+                    if missing:
+                        raise ToolError(
+                            f"missing required argument(s) for tool '{name}': {missing}"
+                        )
+                    if name in _FILTER_TOOLS:
                         filters = arguments.get("filters")
                         if filters is not None or name == "filter_rows":
                             try:
                                 _validate_filters(filters)
                             except QueryError as error:
-                                raise _tool_error_class()(str(error)) from None
+                                raise ToolError(str(error)) from None
             return await super().call_tool(name, arguments, *args, **kwargs)
 
     return Data2AgentServer

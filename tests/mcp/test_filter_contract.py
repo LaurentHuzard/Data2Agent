@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("mcp")
 from jsonschema import Draft202012Validator  # noqa: E402
 
-from data2agent.errors import QueryValidationError  # noqa: E402
+from data2agent.errors import QueryLookupError, QueryValidationError  # noqa: E402
 from data2agent.mcp import DatasetService  # noqa: E402
 from data2agent.mcp.server import build_server  # noqa: E402
 from data2agent.query.operations import FILTER_OPERATORS, _validate_filters  # noqa: E402
@@ -107,3 +107,100 @@ def test_core_contract_rejects_bad_shapes_and_remains_value_error_compatible():
         with pytest.raises(QueryValidationError) as error:
             _validate_filters(value)
         assert isinstance(error.value, ValueError)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tool", "arguments", "expected"),
+    [
+        (
+            "filter_rows",
+            {"path": "animals.csv", "filters": [], "limit": 0},
+            "limit must be at least 1",
+        ),
+        ("read_rows", {"path": "animals.csv", "offset": -1}, "offset must be zero or greater"),
+        ("read_rows", {"path": "animals.csv", "limit": 0}, "limit must be at least 1"),
+        (
+            "aggregate_join",
+            {
+                "left": "animals.csv",
+                "right": "observations.csv",
+                "left_keys": ["animal_id"],
+                "right_keys": ["animal_id"],
+                "how": "cross",
+                "metrics": [{"op": "count"}],
+            },
+            "unsupported join type 'cross'",
+        ),
+        (
+            "aggregate_join",
+            {"left": "animals.csv", "metrics": [{"op": "count"}]},
+            "aggregate_join needs relationship_id",
+        ),
+        (
+            "join_tables",
+            {
+                "left": "animals.csv",
+                "right": "observations.csv",
+                "left_keys": [],
+                "right_keys": [],
+            },
+            "left_keys and right_keys must be non-empty",
+        ),
+        ("read_rows", {"path": "missing.csv"}, "'missing.csv' was not profiled as a table"),
+    ],
+)
+async def test_anticipated_argument_errors_reach_the_client(ingested, tool, arguments, expected):
+    server = build_server(DatasetService(ingested.output_dir))
+    text = await error_text(server, tool, arguments)
+    assert expected in text
+
+
+@pytest.mark.anyio
+async def test_missing_required_argument_is_named(ingested):
+    server = build_server(DatasetService(ingested.output_dir))
+    text = await error_text(server, "filter_rows", {"path": "animals.csv"})
+    assert "missing required argument(s) for tool 'filter_rows'" in text
+    assert "filters" in text
+
+
+@pytest.mark.anyio
+async def test_metric_schemas_are_closed_and_unknown_metric_keys_are_rejected(ingested):
+    server = build_server(DatasetService(ingested.output_dir))
+    tools = {t.name: t for t in await server.list_tools()}
+    for name in ("aggregate", "aggregate_join"):
+        properties = schema_of(tools[name])["properties"]
+        for key in ("metrics", "unit_metrics"):
+            item = next(
+                (v for v in properties[key].get("anyOf", []) if v.get("type") == "array"),
+                properties[key],
+            )["items"]
+            assert item["additionalProperties"] is False
+            assert set(item["properties"]) == {"op", "column", "name"}
+
+    text = await error_text(
+        server,
+        "aggregate",
+        {"path": "animals.csv", "metrics": [{"op": "count", "bogus": 1}]},
+    )
+    assert "metric 0 has unknown keys ['bogus']" in text
+
+
+@pytest.mark.anyio
+async def test_closed_schemas_are_built_once_and_stay_stable(ingested):
+    server = build_server(DatasetService(ingested.output_dir))
+    first = {t.name: copy.deepcopy(schema_of(t)) for t in await server.list_tools()}
+    await error_text(server, "read_rows", {"path": "animals.csv", "limit": 0})
+    second = {t.name: schema_of(t) for t in await server.list_tools()}
+    assert first == second
+
+
+def test_unknown_column_stays_a_key_error_and_a_value_error(ingested):
+    service = DatasetService(ingested.output_dir)
+    with pytest.raises(QueryLookupError) as caught:
+        service.read_rows("animals.csv", columns=["nope"])
+    error = caught.value
+    assert isinstance(error, KeyError)
+    assert isinstance(error, ValueError)
+    assert str(error).startswith("unknown column(s) for 'animals.csv'")
+    assert not str(error).startswith("'")
