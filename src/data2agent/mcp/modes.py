@@ -55,8 +55,19 @@ _CORE_TOOLS = (
 
 # Each FAIR mode is a superset of the one before it: the ladder varies the form
 # of the constraint, never the information underneath.
-_FAIR_RULE_TOOLS = ("get_fair_indicator", "list_fair_rules")
-_FAIR_CHECK_TOOLS = ("run_fair_check", "validate_identifier")
+_FAIR_RULE_TOOLS = (
+    "get_fair_indicator",
+    "list_fair_rules",
+    "list_fair_principles",
+    "get_fair_principle",
+)
+_FAIR_CHECK_TOOLS = (
+    "run_fair_check",
+    "validate_identifier",
+    "assess_fair_principles",
+    "get_fair_recommendations",
+    "plan_fair_publication",
+)
 
 # A per-file record is the resource form of inspect_file, so raw may serve it.
 # Everything else is a view of the manifest, the ledger or the run.

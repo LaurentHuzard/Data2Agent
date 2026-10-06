@@ -54,6 +54,11 @@ def test_fair_rules_withholds_the_deterministic_checks(ingested):
     """The point of the mode: the agent reads the rules and must run them itself."""
     service = DatasetService(ingested.output_dir, mode="fair-rules")
     assert not service.supports("run_fair_check")
+    assert not service.supports("assess_fair_principles")
+    assert not service.supports("get_fair_recommendations")
+    assert not service.supports("plan_fair_publication")
+    assert service.supports("list_fair_principles")
+    assert service.supports("get_fair_principle")
     assert DatasetService(ingested.output_dir, mode="fair-deterministic").supports("run_fair_check")
 
 

@@ -1545,6 +1545,129 @@ class DatasetService:
         """Return one canonical FAIR rule in full, exactly as authored."""
         return self.load_profile("fair").rule(rule_id).as_dict()
 
+    def list_fair_principles(self) -> dict[str, Any]:
+        """List all 15 GO FAIR Foundation items and their local diagnostic rules."""
+        from ..profiles.fair.foundation import list_principles
+
+        return list_principles()
+
+    def get_fair_principle(self, principle_id: str) -> dict[str, Any]:
+        """Return one Foundation item, its evidence requirements, and guidance."""
+        from ..profiles.fair.foundation import get_principle
+
+        return get_principle(principle_id)
+
+    def assess_fair_principles(
+        self,
+        principle_id: str | None = None,
+        *,
+        live: bool = False,
+        publication_url: str | None = None,
+        unpublished: bool = False,
+    ) -> dict[str, Any]:
+        """Analyze local signals for all Foundation items or one selected item.
+
+        Live public HTTP observation is opt-in. A DOI resolver route is bound
+        only when the DOI was declared in dataset metadata. It is a scoped
+        observation, not a full principle pass or proof of resource identity.
+        """
+        from ..profiles.fair.foundation import assess_principles, get_principle
+        from ..profiles.fair.live import matching_declared_doi, probe_public_url
+
+        if principle_id is not None:
+            get_principle(principle_id)
+        if live and not publication_url:
+            raise ValueError("live FAIR assessment requires publication_url")
+        if publication_url and not live:
+            raise ValueError("publication_url requires live=True; network checks are opt-in")
+        if unpublished and (live or publication_url):
+            raise ValueError("an unpublished dataset cannot be probed as a publication")
+        # run_fair_check verifies the entire source snapshot before any local
+        # finding can be used to build a principle-level assessment.
+        narrow = self.run_fair_check()
+        probe = None
+        binding = False
+        if live and publication_url:
+            f1 = next(
+                item for item in narrow["results"] if item["rule_id"] == "F1-PID-METADATA"
+            )
+            identifiers = f1.get("observations", {}).get("identifiers", [])
+            matched_doi = matching_declared_doi(publication_url, identifiers)
+            binding = matched_doi is not None
+            probe = probe_public_url(
+                publication_url,
+                expected_identifier=matched_doi,
+            )
+        return assess_principles(
+            narrow,
+            principle_id,
+            publication_probe=probe,
+            publication_binding=binding,
+            unpublished=unpublished,
+        )
+
+    def get_fair_recommendations(
+        self, rule_id: str | None = None, *, unpublished: bool = False
+    ) -> dict[str, Any]:
+        """Give evidence-linked remediation for local rules and all FAIR items."""
+        from ..profiles.fair.foundation import PRINCIPLES, assess_principles
+        from ..profiles.fair.remediation import build_recommendations
+
+        narrow = self.run_fair_check(rule_id)
+        catalog = build_recommendations(narrow)
+        item_ids = [
+            item["id"]
+            for item in PRINCIPLES
+            if rule_id is None or rule_id in item["local_rules"]
+        ]
+        principle_results = [
+            assess_principles(narrow, identifier, unpublished=unpublished)["results"][0]
+            for identifier in item_ids
+        ]
+        catalog["principle_recommendations"] = [
+            {
+                "principle": result["principle"],
+                "result": result["result"],
+                "observed_local_gaps": result["observed_local_gaps"],
+                "unverified_requirements": [
+                    need for need in result["evidence_plan"] if need["status"] != "verified"
+                ],
+            }
+            for result in principle_results
+        ]
+        catalog["summary"]["principle_count"] = len(principle_results)
+        return catalog
+
+    def plan_fair_publication(
+        self,
+        purpose: str = "explore",
+        owner_approval: bool | None = None,
+        metadata_public_approved: bool | None = None,
+        files_reviewed: bool | None = None,
+        files_public_approved: bool | None = None,
+        test_with_real_data: bool = False,
+        community_submission: bool = False,
+        embargo_until: str | None = None,
+    ) -> dict[str, Any]:
+        """Guide a Zenodo publication decision using current FAIR findings.
+
+        This is advice only. It never uploads files, creates a draft, reserves a
+        DOI, or treats caller answers as independently verified authorization.
+        """
+        from ..profiles.fair.publication import advise_publication
+
+        return advise_publication(
+            self.run_fair_check(),
+            purpose=purpose,
+            owner_approval=owner_approval,
+            metadata_public_approved=metadata_public_approved,
+            files_reviewed=files_reviewed,
+            files_public_approved=files_public_approved,
+            test_with_real_data=test_with_real_data,
+            community_submission=community_submission,
+            embargo_until=embargo_until,
+        )
+
     def run_fair_check(
         self,
         rule_id: str | None = None,
@@ -1553,14 +1676,25 @@ class DatasetService:
         model: str | None = None,
         orchestrator: str | None = None,
     ) -> dict[str, Any]:
-        """Run the deterministic FAIR checks and return an assessment.
+        """Run narrow deterministic FAIR checks and return an assessment.
 
         The verdicts come from code, not from a model. ``unknown`` results are
         preserved rather than resolved: a rule this version cannot run reports
-        unknown and stays in the denominator.
+        unknown and stays in the denominator. A local pass does not establish
+        the full GO FAIR Foundation interpretation.
         """
         from ..profiles.fair import CHECKS
         from ..profiles.runner import run
+
+        verification = self.verify_dataset()
+        if not verification["intact"]:
+            changed = ", ".join(
+                sorted(item["path"] for item in verification["mismatched"])
+            )
+            raise OutputError(
+                f"FAIR assessment cannot use changed or missing source files: {changed}; "
+                "re-ingest the dataset before reassessing"
+            )
 
         profile = self.load_profile("fair")
         generator: dict[str, Any] = {

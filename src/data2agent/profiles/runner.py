@@ -81,6 +81,7 @@ def _run_rule(
         evidence=list(outcome.evidence),
         rationale=outcome.rationale,
         inferred=False,
+        observations=dict(outcome.observations),
     )
 
 

@@ -160,6 +160,10 @@
         "rationale": {
           "type": "string"
         },
+        "observations": {
+          "type": "object",
+          "description": "Structured observations recorded by a deterministic check; never a wider principle verdict."
+        },
         "inferred": {
           "type": "boolean",
           "default": false,

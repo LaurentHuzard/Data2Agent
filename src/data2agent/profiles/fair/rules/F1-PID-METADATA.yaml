@@ -17,6 +17,7 @@ evidence_required: true
 rationale_required_for: [fail, unknown]
 
 notes: >
-  Presence only. A DOI-shaped string in a metadata file is evidence that an
-  identifier was recorded, not that it resolves or that it is the dataset's own.
+  Presence in an explicit dataset identifier field only. Citations to papers or
+  identifiers of people and organizations do not identify this dataset. A
+  DOI-shaped value is not proof of assignment, persistence, or resolution.
   Resolution is F1-PID-RESOLVABLE, which this version cannot run.
