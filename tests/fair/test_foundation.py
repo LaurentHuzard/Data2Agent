@@ -43,7 +43,8 @@ def test_every_foundation_item_is_addressable_and_links_to_known_rules(ingested)
         assert len(detail["evidence_plan"]) == len(detail["required_evidence"])
         assert all(need["action"] for need in detail["evidence_plan"])
         assert all(
-            need["evidence_origin"] in {
+            need["evidence_origin"]
+            in {
                 "local",
                 "live_publication",
                 "external_document",
@@ -109,9 +110,7 @@ def test_missing_metadata_produces_repair_then_discovery_evidence_steps(tmp_path
 def test_foundation_assessment_matches_public_schema(ingested):
     jsonschema = pytest.importorskip("jsonschema")
     schema_path = (
-        Path(__file__).resolve().parents[2]
-        / "schemas"
-        / "fair-foundation-assessment.schema.json"
+        Path(__file__).resolve().parents[2] / "schemas" / "fair-foundation-assessment.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assessment = DatasetService(
@@ -131,11 +130,11 @@ def test_unpublished_assessment_marks_only_release_dependent_requirements(ingest
     assert assessment["publication_state"] == "user_declared_unpublished"
     assert assessment["summary"] == {"total": 15, "pass": 0, "unknown": 15}
     assert [need["status"] for need in by_id["F4"]["evidence_plan"]] == [
-        "not_verified", "pending_publication", "pending_publication"
+        "not_verified",
+        "pending_publication",
+        "pending_publication",
     ]
-    assert all(
-        need["status"] == "not_verified" for need in by_id["I2"]["evidence_plan"]
-    )
+    assert all(need["status"] == "not_verified" for need in by_id["I2"]["evidence_plan"])
     assert all(
         need["action"].startswith("Prepare this for release")
         for need in by_id["F4"]["evidence_plan"][1:]
