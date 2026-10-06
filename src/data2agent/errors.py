@@ -19,3 +19,11 @@ class ModeError(Data2AgentError):
 
 class LayoutError(Data2AgentError):
     """A table layout declaration is malformed, or names a table that does not exist."""
+
+
+class QueryError(Data2AgentError):
+    """A well-formed deterministic dataset query cannot be executed."""
+
+
+class QueryValidationError(QueryError, ValueError):
+    """An anticipated query rejection, safe to expose and still a ValueError."""

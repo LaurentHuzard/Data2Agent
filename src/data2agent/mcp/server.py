@@ -9,9 +9,12 @@ allowed to accumulate below the MCP boundary.
 
 from __future__ import annotations
 
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from ..errors import QueryError
+from ..query.operations import FILTER_OPERATORS, _validate_filters
 from .modes import DEFAULT_MODE
 from .service import DatasetService
 
@@ -21,7 +24,7 @@ _MCP_IMPORT_HINT = (
 )
 
 
-def _server_class() -> Any:
+def _base_server_class() -> Any:
     """Return the SDK's server class, across the 1.x/2.x rename.
 
     ``FastMCP`` became ``MCPServer`` in mcp 2.x. The decorator API we rely on is
@@ -40,6 +43,113 @@ def _server_class() -> Any:
         return FastMCP
     except ImportError as error:  # pragma: no cover - depends on optional extra
         raise ImportError(_MCP_IMPORT_HINT) from error
+
+
+def _tool_error_class() -> Any:
+    """Return ToolError across the MCP SDK 1.x/2.x package rename."""
+    try:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        return ToolError
+    except ImportError:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        return ToolError
+
+
+def _expose_query_errors(function: Any) -> Any:
+    """Expose anticipated query rejections without leaking unexpected crashes."""
+
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return function(*args, **kwargs)
+        except QueryError as error:
+            raise _tool_error_class()(str(error)) from None
+
+    return wrapped
+
+
+def _tool_input_schema(tool: Any) -> dict[str, Any]:
+    """Return the mutable input schema across MCP SDK 1.x/2.x field naming."""
+
+    for name in ("input_schema", "inputSchema"):
+        schema = getattr(tool, name, None)
+        if isinstance(schema, dict):
+            return schema
+    raise RuntimeError("MCP tool does not expose an input schema")
+
+
+def _server_class() -> Any:
+    """Return a Data2Agent server that keeps published and executed args identical."""
+
+    base = _base_server_class()
+
+    class Data2AgentServer(base):
+        async def list_tools(self) -> list[Any]:
+            tools = await super().list_tools()
+            for tool in tools:
+                _tool_input_schema(tool)["additionalProperties"] = False
+                if tool.name in {"filter_rows", "aggregate", "aggregate_join"}:
+                    filters = _tool_input_schema(tool)["properties"]["filters"]
+                    array = next(
+                        (item for item in filters.get("anyOf", []) if item.get("type") == "array"),
+                        filters,
+                    )
+                    array["items"] = {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["column", "op"],
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": {"op": {"enum": ["is_missing", "is_not_missing"]}}
+                                },
+                                "else": {"required": ["value"]},
+                            },
+                            {
+                                "if": {"properties": {"op": {"enum": ["in", "not_in"]}}},
+                                "then": {"properties": {"value": {"type": "array"}}},
+                            },
+                        ],
+                        "properties": {
+                            "column": {"type": "string", "minLength": 1},
+                            "op": {"type": "string", "enum": sorted(FILTER_OPERATORS)},
+                            "value": {
+                                "description": "Required except for is_missing/is_not_missing; "
+                                "in/not_in require an array. Values are compared without coercion."
+                            },
+                        },
+                    }
+            return tools
+
+        async def call_tool(
+            self, name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any
+        ) -> Any:
+            if isinstance(arguments, dict):
+                tools = {tool.name: tool for tool in await self.list_tools()}
+                tool = tools.get(name)
+                if tool is not None:
+                    schema = _tool_input_schema(tool)
+                    properties = schema.get("properties")
+                    allowed = set(properties) if isinstance(properties, dict) else set()
+                    unknown = sorted(set(arguments) - allowed)
+                    if unknown:
+                        ToolError = _tool_error_class()
+                        raise ToolError(
+                            f"unknown argument(s) for tool '{name}': {unknown}; "
+                            f"allowed arguments: {sorted(allowed)}"
+                        )
+                    if name in {"filter_rows", "aggregate", "aggregate_join"}:
+                        filters = arguments.get("filters")
+                        if filters is not None or name == "filter_rows":
+                            try:
+                                _validate_filters(filters)
+                            except QueryError as error:
+                                raise _tool_error_class()(str(error)) from None
+            return await super().call_tool(name, arguments, *args, **kwargs)
+
+    return Data2AgentServer
 
 
 def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
@@ -162,6 +272,10 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
     ) -> dict[str, Any]:
         """Read a bounded slice of actual observations from a profiled table.
 
+        This tool reads by offset/limit only. It does not apply predicates or
+        filter conditions. When rows must satisfy conditions on column values,
+        use filter_rows instead.
+
         Values come from the immutable source bytes after checksum verification.
         Missing sentinels are normalised under the same convention used at
         ingest, with the original sentinel retained in the row's missing map.
@@ -177,8 +291,15 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
     ) -> dict[str, Any]:
         """Filter observations with a closed operator registry.
 
+        Use this tool whenever returned rows must satisfy one or more conditions
+        on column values. Unlike read_rows, this tool applies the supplied
+        predicates before returning observations.
+
         Supported operators are deterministic data comparisons only; no Python,
         SQL, regex execution, or free-form expression language is accepted.
+        Each filter uses column, op, value, e.g.
+        {"column": "group", "op": "eq", "value": "control"}.
+        Omit value only for is_missing/is_not_missing. in/not_in need an array.
         """
         return service.filter_rows(path, filters=filters, columns=columns, limit=limit)
 
@@ -529,7 +650,7 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
         implementation = implementations.get(tool_name)
         if implementation is None:  # pragma: no cover - guarded by modes.resolve_mode
             raise KeyError(f"mode '{service.mode.name}' requests unimplemented tool '{tool_name}'")
-        server.tool(name=tool_name)(implementation)
+        server.tool(name=tool_name)(_expose_query_errors(implementation))
 
     return server
 
