@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import QueryError
+from ..query.operations import FILTER_OPERATORS, _validate_filters
 from .modes import DEFAULT_MODE
 from .service import DatasetService
 
@@ -89,9 +90,42 @@ def _server_class() -> Any:
             tools = await super().list_tools()
             for tool in tools:
                 _tool_input_schema(tool)["additionalProperties"] = False
+                if tool.name in {"filter_rows", "aggregate", "aggregate_join"}:
+                    filters = _tool_input_schema(tool)["properties"]["filters"]
+                    array = next(
+                        (item for item in filters.get("anyOf", []) if item.get("type") == "array"),
+                        filters,
+                    )
+                    array["items"] = {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["column", "op"],
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": {"op": {"enum": ["is_missing", "is_not_missing"]}}
+                                },
+                                "else": {"required": ["value"]},
+                            },
+                            {
+                                "if": {"properties": {"op": {"enum": ["in", "not_in"]}}},
+                                "then": {"properties": {"value": {"type": "array"}}},
+                            },
+                        ],
+                        "properties": {
+                            "column": {"type": "string", "minLength": 1},
+                            "op": {"type": "string", "enum": sorted(FILTER_OPERATORS)},
+                            "value": {
+                                "description": "Required except for is_missing/is_not_missing; "
+                                "in/not_in require an array. Values are compared without coercion."
+                            },
+                        },
+                    }
             return tools
 
-        async def call_tool(self, name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        async def call_tool(
+            self, name: str, arguments: dict[str, Any], *args: Any, **kwargs: Any
+        ) -> Any:
             if isinstance(arguments, dict):
                 tools = {tool.name: tool for tool in await self.list_tools()}
                 tool = tools.get(name)
@@ -106,6 +140,13 @@ def _server_class() -> Any:
                             f"unknown argument(s) for tool '{name}': {unknown}; "
                             f"allowed arguments: {sorted(allowed)}"
                         )
+                    if name in {"filter_rows", "aggregate", "aggregate_join"}:
+                        filters = arguments.get("filters")
+                        if filters is not None or name == "filter_rows":
+                            try:
+                                _validate_filters(filters)
+                            except QueryError as error:
+                                raise _tool_error_class()(str(error)) from None
             return await super().call_tool(name, arguments, *args, **kwargs)
 
     return Data2AgentServer
@@ -256,6 +297,9 @@ def build_server(service: DatasetService, *, name: str = "data2agent") -> Any:
 
         Supported operators are deterministic data comparisons only; no Python,
         SQL, regex execution, or free-form expression language is accepted.
+        Each filter uses column, op, value, e.g.
+        {"column": "group", "op": "eq", "value": "control"}.
+        Omit value only for is_missing/is_not_missing. in/not_in need an array.
         """
         return service.filter_rows(path, filters=filters, columns=columns, limit=limit)
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import query, relationships
-from ..errors import ModeError, OutputError, QueryError
+from ..errors import ModeError, OutputError, QueryError, QueryValidationError
 from ..evidence import EvidenceLedger
 from ..ingest.checksum import hash_file
 from ..ingest.conventions import MissingValueConvention
@@ -536,7 +536,7 @@ class DatasetService:
         unit_columns = list(unit or [])
         stage_one = list(unit_metrics or [])
         if stage_one and not unit_columns:
-            raise ValueError("unit_metrics requires a unit declaration")
+            raise QueryValidationError("unit_metrics requires a unit declaration")
         profile = self._table_profile(path)
         available = [column["name"] for column in profile.get("columns", [])]
         dtypes = {column["name"]: column.get("dtype", "string") for column in profile["columns"]}
@@ -663,7 +663,7 @@ class DatasetService:
         unit_columns = list(unit or [])
         stage_one = list(unit_metrics or [])
         if stage_one and not unit_columns:
-            raise ValueError("unit_metrics requires a unit declaration")
+            raise QueryValidationError("unit_metrics requires a unit declaration")
 
         explicit = (left, right, left_keys, right_keys)
         contract: dict[str, Any] | None = None
@@ -1588,9 +1588,7 @@ class DatasetService:
         probe = None
         binding = False
         if live and publication_url:
-            f1 = next(
-                item for item in narrow["results"] if item["rule_id"] == "F1-PID-METADATA"
-            )
+            f1 = next(item for item in narrow["results"] if item["rule_id"] == "F1-PID-METADATA")
             identifiers = f1.get("observations", {}).get("identifiers", [])
             matched_doi = matching_declared_doi(publication_url, identifiers)
             binding = matched_doi is not None
@@ -1616,9 +1614,7 @@ class DatasetService:
         narrow = self.run_fair_check(rule_id)
         catalog = build_recommendations(narrow)
         item_ids = [
-            item["id"]
-            for item in PRINCIPLES
-            if rule_id is None or rule_id in item["local_rules"]
+            item["id"] for item in PRINCIPLES if rule_id is None or rule_id in item["local_rules"]
         ]
         principle_results = [
             assess_principles(narrow, identifier, unpublished=unpublished)["results"][0]
@@ -1688,9 +1684,7 @@ class DatasetService:
 
         verification = self.verify_dataset()
         if not verification["intact"]:
-            changed = ", ".join(
-                sorted(item["path"] for item in verification["mismatched"])
-            )
+            changed = ", ".join(sorted(item["path"] for item in verification["mismatched"]))
             raise OutputError(
                 f"FAIR assessment cannot use changed or missing source files: {changed}; "
                 "re-ingest the dataset before reassessing"
@@ -2476,9 +2470,7 @@ def _bounded_contributor_locators(locators: list[Any]) -> dict[str, Any]:
     }
 
 
-def _contributor_input(
-    table: str, context: dict[str, Any], locators: list[Any]
-) -> dict[str, Any]:
+def _contributor_input(table: str, context: dict[str, Any], locators: list[Any]) -> dict[str, Any]:
     """Contributor provenance for one aggregate input without rereading source bytes."""
 
     return {
