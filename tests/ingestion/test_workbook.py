@@ -240,6 +240,31 @@ def test_a_worksheet_is_reachable_through_read_rows(tmp_path: Path):
     assert payload["rows"][1]["missing"]["sex"] == {"kind": "sentinel", "raw": "NA"}
 
 
+def test_workbook_aggregate_provenance_keeps_worksheet_rows(tmp_path: Path):
+    """Aggregate provenance keeps worksheet coordinates distinct from file lines."""
+    from data2agent.mcp.service import DatasetService
+
+    source = tmp_path / "ds"
+    source.mkdir()
+    _write(
+        source / "animals.xlsx",
+        [["id", "weight_g"], [1, 20], [2, 21]],
+        lead_blank=2,
+    )
+
+    out = tmp_path / "out"
+    ingest(source, out)
+    payload = DatasetService(out, mode="structured").aggregate(
+        "animals.xlsx#Sheet1",
+        metrics=[{"op": "count"}],
+    )
+
+    contributor = payload["provenance"]["inputs"][0]
+    assert contributor["row_locator"] == "1-based worksheet row"
+    assert contributor["included_source_row_ranges"] == [[4, 5]]
+    assert contributor["backing_file"] == "animals.xlsx"
+
+
 def test_a_workbook_manifest_validates_against_the_published_schema(tmp_path: Path):
     """Every manifest holding a worksheet failed the schema before this."""
     import json

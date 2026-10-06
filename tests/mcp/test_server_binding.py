@@ -244,6 +244,10 @@ async def test_calling_aggregate_over_mcp_returns_group_statistics(server):
     groups = {item["group"]["genotype"]: item["metrics"] for item in payload["groups"]}
     assert groups["KO"]["n"] == 24
     assert groups["WT"]["n"] == 24
+    contributor = payload["provenance"]["inputs"][0]
+    assert contributor["complete"] is True
+    assert contributor["backing_file"] == "animals.csv"
+    assert contributor["included_source_row_ranges"] == [[2, 49]]
 
 
 @pytest.mark.anyio

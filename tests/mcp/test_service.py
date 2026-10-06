@@ -11,11 +11,52 @@ from data2agent.errors import OutputError
 from data2agent.ingest import ingest
 from data2agent.ingest.conventions import STRICT_CONVENTION
 from data2agent.mcp import DatasetService
+from data2agent.mcp.service import _bounded_contributor_locators
 
 
 @pytest.fixture
 def service(ingested) -> DatasetService:
     return DatasetService(ingested.output_dir)
+
+
+def test_contributor_provenance_is_explicit_when_range_cap_is_exceeded():
+    # 4,097 isolated integers need 4,097 ranges, one above the output cap.
+    payload = _bounded_contributor_locators(list(range(2, 8196, 2)))
+    assert payload["complete"] is False
+    assert payload["included_source_row_ranges"] == []
+    assert payload["unique_source_rows"] == 4097
+    assert "output cap" in payload["reason"]
+
+
+def test_contributor_provenance_is_incomplete_when_rows_lack_locators():
+    payload = _bounded_contributor_locators([None, None, None], expected_rows=3)
+    assert payload["complete"] is False
+    assert payload["row_occurrences_entering_aggregation"] == 0
+    assert "3 of 3 row(s) carry no source-row locator" in payload["reason"]
+
+
+def test_empty_contributor_provenance_is_complete_when_no_rows_were_expected():
+    payload = _bounded_contributor_locators([], expected_rows=0)
+    assert payload["complete"] is True
+    assert payload["row_occurrences_entering_aggregation"] == 0
+    assert payload["included_source_row_ranges"] == []
+
+
+def test_non_numeric_contributor_locators_are_preserved_exactly():
+    locators = [
+        {"observation_id": "obs-2", "event_index": 4},
+        {"observation_id": "obs-1", "event_index": 2},
+        {"observation_id": "obs-1", "event_index": 2},
+    ]
+    payload = _bounded_contributor_locators(locators)
+    assert payload["complete"] is True
+    assert payload["row_occurrences_entering_aggregation"] == 3
+    assert payload["unique_source_rows"] == 2
+    assert payload["locator_encoding"] == "exact_objects"
+    assert payload["included_source_locators"] == [
+        {"observation_id": "obs-1", "event_index": 2},
+        {"observation_id": "obs-2", "event_index": 4},
+    ]
 
 
 def test_dataset_inventory_reports_identity_and_warnings(service, ingested):
@@ -115,6 +156,24 @@ def test_aggregate_computes_group_counts_and_numeric_means(service):
     assert groups["WT"]["mean_weight_g"] == pytest.approx(24.041666666666668)
     assert payload["rows_included"] == 48
     assert payload["input"]["scan_complete"] is True
+    assert payload["provenance"] == {
+        "scope": "post_filter_pre_metric",
+        "complete": True,
+        "rows_dropped_by_unit_policy": 0,
+        "inputs": [
+            {
+                "table": "animals.csv",
+                "backing_file": "animals.csv",
+                "backing_sha256": payload["input"]["backing_sha256"],
+                "row_locator": payload["input"]["row_locator"],
+                "complete": True,
+                "row_occurrences_entering_aggregation": 48,
+                "unique_source_rows": 48,
+                "locator_encoding": "inclusive_integer_ranges",
+                "included_source_row_ranges": [[2, 49]],
+            }
+        ],
+    }
 
 
 def test_aggregate_can_filter_before_grouping(service):
@@ -131,6 +190,10 @@ def test_aggregate_can_filter_before_grouping(service):
     assert [item["group"]["session"] for item in payload["groups"]] == [1, 2, 3]
     assert all(item["metrics"]["n"] == 2 for item in payload["groups"])
     assert payload["rows_included"] == 6
+    contributor = payload["provenance"]["inputs"][0]
+    assert contributor["complete"] is True
+    assert contributor["included_source_row_ranges"] == [[2, 7]]
+    assert contributor["row_occurrences_entering_aggregation"] == 6
 
 
 def test_describe_variable_reports_observed_numeric_summary(service):
