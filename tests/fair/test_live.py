@@ -32,9 +32,12 @@ def test_doi_binding_requires_exact_dataset_identifier():
     assert not bound_doi_url("https://doi.org/10.5281/zenodo.0000001", identifiers)
     assert not bound_doi_url("https://fake.example/10.5281/zenodo.0000000", identifiers)
     assert not bound_doi_url("https://doi.org/10.5281/zenodo.0000000?token=x", identifiers)
-    assert matching_declared_doi(
-        "https://doi.org/10.5281/zenodo.0000000", ["10.1234/unrelated", *identifiers]
-    ) == identifiers[0]
+    assert (
+        matching_declared_doi(
+            "https://doi.org/10.5281/zenodo.0000000", ["10.1234/unrelated", *identifiers]
+        )
+        == identifiers[0]
+    )
 
 
 def test_sample_doi_match_requires_token_boundaries(monkeypatch):

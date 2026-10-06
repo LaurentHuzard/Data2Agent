@@ -1557,9 +1557,7 @@ class DatasetService:
         probe = None
         binding = False
         if live and publication_url:
-            f1 = next(
-                item for item in narrow["results"] if item["rule_id"] == "F1-PID-METADATA"
-            )
+            f1 = next(item for item in narrow["results"] if item["rule_id"] == "F1-PID-METADATA")
             identifiers = f1.get("observations", {}).get("identifiers", [])
             matched_doi = matching_declared_doi(publication_url, identifiers)
             binding = matched_doi is not None
@@ -1585,9 +1583,7 @@ class DatasetService:
         narrow = self.run_fair_check(rule_id)
         catalog = build_recommendations(narrow)
         item_ids = [
-            item["id"]
-            for item in PRINCIPLES
-            if rule_id is None or rule_id in item["local_rules"]
+            item["id"] for item in PRINCIPLES if rule_id is None or rule_id in item["local_rules"]
         ]
         principle_results = [
             assess_principles(narrow, identifier, unpublished=unpublished)["results"][0]
@@ -1657,9 +1653,7 @@ class DatasetService:
 
         verification = self.verify_dataset()
         if not verification["intact"]:
-            changed = ", ".join(
-                sorted(item["path"] for item in verification["mismatched"])
-            )
+            changed = ", ".join(sorted(item["path"] for item in verification["mismatched"]))
             raise OutputError(
                 f"FAIR assessment cannot use changed or missing source files: {changed}; "
                 "re-ingest the dataset before reassessing"

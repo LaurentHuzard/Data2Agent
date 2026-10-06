@@ -96,8 +96,7 @@ def test_known_metadata_and_terms_gaps_hold_release_at_draft(tmp_path: Path):
 def test_missing_provenance_keeps_a_public_release_at_draft(ingested):
     assessment = _service(ingested).run_fair_check()
     provenance = next(
-        item for item in assessment["results"]
-        if item["rule_id"] == "R1.2-PROVENANCE-DECLARED"
+        item for item in assessment["results"] if item["rule_id"] == "R1.2-PROVENANCE-DECLARED"
     )
     provenance["result"] = "fail"
     advice = advise_publication(
@@ -121,20 +120,14 @@ def test_community_submission_surfaces_auto_publication_and_invalid_answers(inge
     with pytest.raises(ValueError, match="answers"):
         service.plan_fair_publication(owner_approval="yes")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="future public file access"):
-        service.plan_fair_publication(
-            files_public_approved=False, embargo_until="2099-12-31"
-        )
+        service.plan_fair_publication(files_public_approved=False, embargo_until="2099-12-31")
 
 
 def test_publication_guidance_matches_schema(ingested):
     jsonschema = pytest.importorskip("jsonschema")
     schema_path = (
-        Path(__file__).resolve().parents[2]
-        / "schemas"
-        / "fair-publication-advice.schema.json"
+        Path(__file__).resolve().parents[2] / "schemas" / "fair-publication-advice.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     jsonschema.validate(_service(ingested).plan_fair_publication(), schema)
-    jsonschema.validate(
-        _service(ingested).plan_fair_publication(purpose="test"), schema
-    )
+    jsonschema.validate(_service(ingested).plan_fair_publication(purpose="test"), schema)
