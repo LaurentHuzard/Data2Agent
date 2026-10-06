@@ -23,3 +23,7 @@ class LayoutError(Data2AgentError):
 
 class QueryError(Data2AgentError):
     """A well-formed deterministic dataset query cannot be executed."""
+
+
+class QueryValidationError(QueryError, ValueError):
+    """An anticipated query rejection, safe to expose and still a ValueError."""

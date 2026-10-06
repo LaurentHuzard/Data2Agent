@@ -383,8 +383,10 @@ def assess_principles(
     """
     if unpublished and publication_probe is not None:
         raise ValueError("an unpublished assessment cannot include a publication probe")
-    entries = (get_principle(identifier),) if identifier else tuple(
-        get_principle(item["id"]) for item in PRINCIPLES
+    entries = (
+        (get_principle(identifier),)
+        if identifier
+        else tuple(get_principle(item["id"]) for item in PRINCIPLES)
     )
     by_rule = {result["rule_id"]: result for result in narrow_assessment["results"]}
     results: list[dict[str, Any]] = []
@@ -451,7 +453,8 @@ def assess_principles(
                 "required_evidence": list(item["required_evidence"]),
                 "acceptance_criteria": item["acceptance_criteria"],
                 "evidence_plan": plan,
-                "evidence": verified_evidence + [
+                "evidence": verified_evidence
+                + [
                     {
                         "check": "foundation.evidence-coverage",
                         "result": result,
